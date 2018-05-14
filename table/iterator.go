@@ -23,7 +23,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/dgraph-io/badger/y"
+	"github.com/coocood/badger/y"
 	"github.com/pkg/errors"
 )
 

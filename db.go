@@ -27,13 +27,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dgraph-io/badger/options"
+	"github.com/coocood/badger/options"
 
 	"golang.org/x/net/trace"
 
-	"github.com/dgraph-io/badger/skl"
-	"github.com/dgraph-io/badger/table"
-	"github.com/dgraph-io/badger/y"
+	"github.com/coocood/badger/skl"
+	"github.com/coocood/badger/table"
+	"github.com/coocood/badger/y"
 	"github.com/pkg/errors"
 )
 

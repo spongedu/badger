@@ -19,7 +19,7 @@ package cmd
 import (
 	"os"
 
-	"github.com/dgraph-io/badger"
+	"github.com/coocood/badger"
 	"github.com/spf13/cobra"
 )
 
