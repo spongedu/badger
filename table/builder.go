@@ -22,7 +22,7 @@ import (
 	"io"
 	"math"
 
-	"github.com/AndreasBriese/bbloom"
+	"github.com/coocood/bbloom"
 	"github.com/coocood/badger/y"
 )
 
@@ -261,7 +261,7 @@ func (b *Builder) Finish() []byte {
 	b.buf.Write(index)
 
 	// Write bloom filter.
-	bdata := bf.JSONMarshal()
+	bdata := bf.BinaryMarshal()
 	n, err := b.buf.Write(bdata)
 	y.Check(err)
 	var buf [4]byte
