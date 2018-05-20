@@ -27,7 +27,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/AndreasBriese/bbloom"
+	"github.com/coocood/bbloom"
 	"github.com/coocood/badger/options"
 	"github.com/coocood/badger/y"
 	"github.com/pkg/errors"
@@ -204,7 +204,7 @@ func (t *Table) readIndex() error {
 	bloomLen := int(binary.BigEndian.Uint32(buf))
 	readPos -= bloomLen
 	data := t.readNoFail(readPos, bloomLen)
-	t.bf = bbloom.JSONUnmarshal(data)
+	t.bf.BinaryUnmarshal(data)
 
 	readPos -= 4
 	buf = t.readNoFail(readPos, 4)
