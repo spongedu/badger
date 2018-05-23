@@ -22,8 +22,8 @@ import (
 	"io"
 	"math"
 
-	"github.com/coocood/bbloom"
 	"github.com/coocood/badger/y"
+	"github.com/coocood/bbloom"
 )
 
 var (
@@ -142,7 +142,7 @@ func (b *Builder) addHelper(key []byte, v y.ValueStruct) {
 	}
 	b.prevOffset = uint32(b.buf.Len()) - b.baseOffset // Remember current offset for the next Add call.
 
-	b.entryOffsets = append(b.entryOffsets, uint32(b.buf.Len()) - b.baseOffset)
+	b.entryOffsets = append(b.entryOffsets, uint32(b.buf.Len())-b.baseOffset)
 
 	// Layout: header, diffKey, value.
 	var hbuf [10]byte
@@ -220,10 +220,10 @@ func (b *Builder) entryIndex() []byte {
 	// `seek`.
 	// TODO: Remove this once the `Prev` and related fuctions are modified
 	// to leverage this entry index (and the dummy header is not added anymore).
-	b.entryOffsets = b.entryOffsets[:len(b.entryOffsets) - 1]
+	b.entryOffsets = b.entryOffsets[:len(b.entryOffsets)-1]
 
 	// Add 4 because we want to write out the length of the index at the end.
-	index := make([]byte, 4 * len(b.entryOffsets) + 4)
+	index := make([]byte, 4*len(b.entryOffsets)+4)
 	buf := index
 	for _, offset := range b.entryOffsets {
 		binary.BigEndian.PutUint32(buf[:4], offset)

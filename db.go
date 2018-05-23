@@ -548,19 +548,17 @@ func (db *DB) writeToLSM(b *request) error {
 		if db.shouldWriteValueToLSM(*entry) { // Will include deletion / tombstone case.
 			db.mt.Put(entry.Key,
 				y.ValueStruct{
-					Value:     entry.Value,
-					Meta:      entry.meta,
-					UserMeta:  entry.UserMeta,
-					ExpiresAt: entry.ExpiresAt,
+					Value:    entry.Value,
+					Meta:     entry.meta,
+					UserMeta: entry.UserMeta,
 				})
 		} else {
 			var offsetBuf [vptrSize]byte
 			db.mt.Put(entry.Key,
 				y.ValueStruct{
-					Value:     b.Ptrs[i].Encode(offsetBuf[:]),
-					Meta:      entry.meta | bitValuePointer,
-					UserMeta:  entry.UserMeta,
-					ExpiresAt: entry.ExpiresAt,
+					Value:    b.Ptrs[i].Encode(offsetBuf[:]),
+					Meta:     entry.meta | bitValuePointer,
+					UserMeta: entry.UserMeta,
 				})
 		}
 	}

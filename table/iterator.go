@@ -92,21 +92,21 @@ var (
 // it from the rest of `data` adjusting its length (see `entryIndex`).
 // The index is loaded and only its length is parsed, the rest will
 // be process by a lazy-initialization in `readEntryIndex`.
-func (itr *blockIterator) loadEntryIndex()  {
+func (itr *blockIterator) loadEntryIndex() {
 	// Get the number of entries from the end of `data` (and remove it).
-	itr.entriesNum = binary.BigEndian.Uint32(itr.data[(len(itr.data) - 4) : len(itr.data)])
+	itr.entriesNum = binary.BigEndian.Uint32(itr.data[(len(itr.data) - 4):len(itr.data)])
 	itr.data = itr.data[:(len(itr.data) - 4)]
 
 	// Move the index from `data` to `entryIndex`.
-	itr.entryIndex = itr.data[(len(itr.data) - int(itr.entriesNum) * 4) : len(itr.data)]
-	itr.data = itr.data[:(len(itr.data) - int(itr.entriesNum) * 4)]
+	itr.entryIndex = itr.data[(len(itr.data) - int(itr.entriesNum)*4):len(itr.data)]
+	itr.data = itr.data[:(len(itr.data) - int(itr.entriesNum)*4)]
 }
 
 // getEntryOffset retrieves the offset of the entry of the given `idx`.
 // The value is computed in the moment and is not cached because the block
 // (and it's iterator) will be discarded in the next table's `seekFrom`.
 func (itr *blockIterator) getEntryOffset(idx int) uint32 {
-	return binary.BigEndian.Uint32(itr.entryIndex[4 * idx : 4 * (idx + 1)])
+	return binary.BigEndian.Uint32(itr.entryIndex[4*idx : 4*(idx+1)])
 }
 
 // Seek brings us to the first block element that is >= input key.
@@ -123,7 +123,7 @@ func (itr *blockIterator) Seek(key []byte, whence int) {
 
 	foundEntryIdx := sort.Search(int(itr.entriesNum), func(idx int) bool {
 		entryOffset := itr.getEntryOffset(idx)
-		
+
 		// Mimic the code executed by `Next` to modify the the rest
 		// of the iterator behavior as less as possible (at this point)
 		// TODO: `Next` and related should use the entry index and

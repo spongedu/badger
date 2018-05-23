@@ -241,7 +241,6 @@ func (r *safeRead) Entry(reader *bufio.Reader) (*Entry, error) {
 	}
 	e.meta = h.meta
 	e.UserMeta = h.userMeta
-	e.ExpiresAt = h.expiresAt
 	return e, nil
 }
 
@@ -1029,7 +1028,7 @@ func discardEntry(e Entry, vs y.ValueStruct) bool {
 		// Version not found. Discard.
 		return true
 	}
-	if isDeletedOrExpired(vs.Meta, vs.ExpiresAt) {
+	if isDeleted(vs.Meta) {
 		return true
 	}
 	if (vs.Meta & bitValuePointer) == 0 {

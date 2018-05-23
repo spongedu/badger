@@ -23,7 +23,6 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/coocood/badger/y"
 	farm "github.com/dgryski/go-farm"
@@ -189,11 +188,10 @@ func (pi *pendingWritesIterator) Value() y.ValueStruct {
 	y.AssertTrue(pi.Valid())
 	entry := pi.entries[pi.nextIdx]
 	return y.ValueStruct{
-		Value:     entry.Value,
-		Meta:      entry.meta,
-		UserMeta:  entry.UserMeta,
-		ExpiresAt: entry.ExpiresAt,
-		Version:   pi.readTs,
+		Value:    entry.Value,
+		Meta:     entry.meta,
+		UserMeta: entry.UserMeta,
+		Version:  pi.readTs,
 	}
 }
 
@@ -271,15 +269,6 @@ func (txn *Txn) SetWithDiscard(key, val []byte, meta byte) error {
 	return txn.SetEntry(e)
 }
 
-// SetWithTTL adds a key-value pair to the database, along with a time-to-live
-// (TTL) setting. A key stored with a TTL would automatically expire after
-// the time has elapsed , and be eligible for garbage collection.
-func (txn *Txn) SetWithTTL(key, val []byte, dur time.Duration) error {
-	expire := time.Now().Add(dur).Unix()
-	e := &Entry{Key: key, Value: val, ExpiresAt: uint64(expire)}
-	return txn.SetEntry(e)
-}
-
 func (txn *Txn) modify(e *Entry) error {
 	if !txn.update {
 		return ErrReadOnlyTxn
@@ -331,7 +320,7 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 	item = new(Item)
 	if txn.update {
 		if e, has := txn.pendingWrites[string(key)]; has && bytes.Equal(key, e.Key) {
-			if isDeletedOrExpired(e.meta, e.ExpiresAt) {
+			if isDeleted(e.meta) {
 				return nil, ErrKeyNotFound
 			}
 			// Fulfill from cache.
@@ -341,7 +330,6 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 			item.key = key
 			item.status = prefetched
 			item.version = txn.readTs
-			item.expiresAt = e.ExpiresAt
 			// We probably don't need to set db on item here.
 			return item, nil
 		}
@@ -359,7 +347,7 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 	if vs.Value == nil && vs.Meta == 0 {
 		return nil, ErrKeyNotFound
 	}
-	if isDeletedOrExpired(vs.Meta, vs.ExpiresAt) {
+	if isDeleted(vs.Meta) {
 		return nil, ErrKeyNotFound
 	}
 
@@ -370,7 +358,6 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 	item.db = txn.db
 	item.vptr = vs.Value
 	item.txn = txn
-	item.expiresAt = vs.ExpiresAt
 	return item, nil
 }
 
