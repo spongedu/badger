@@ -900,50 +900,6 @@ func TestDiscardVersionsBelow(t *testing.T) {
 	})
 }
 
-func TestExpiry(t *testing.T) {
-	runBadgerTest(t, nil, func(t *testing.T, db *DB) {
-		// Write two keys, one with a TTL
-		err := db.Update(func(txn *Txn) error {
-			return txn.Set([]byte("answer1"), []byte("42"))
-		})
-		require.NoError(t, err)
-
-		err = db.Update(func(txn *Txn) error {
-			return txn.SetWithTTL([]byte("answer2"), []byte("43"), 1*time.Second)
-		})
-		require.NoError(t, err)
-
-		time.Sleep(2 * time.Second)
-
-		// Verify that only unexpired key is found during iteration
-		err = db.View(func(txn *Txn) error {
-			_, err := txn.Get([]byte("answer1"))
-			require.NoError(t, err)
-
-			_, err = txn.Get([]byte("answer2"))
-			require.Equal(t, ErrKeyNotFound, err)
-			return nil
-		})
-		require.NoError(t, err)
-
-		// Verify that only one key is found during iteration
-		opts := DefaultIteratorOptions
-		opts.PrefetchValues = false
-		err = db.View(func(txn *Txn) error {
-			it := txn.NewIterator(opts)
-			var count int
-			for it.Rewind(); it.Valid(); it.Next() {
-				count++
-				item := it.Item()
-				require.Equal(t, []byte("answer1"), item.Key())
-			}
-			require.Equal(t, 1, count)
-			return nil
-		})
-		require.NoError(t, err)
-	})
-}
-
 func randBytes(n int) []byte {
 	recv := make([]byte, n)
 	in, err := rand.Read(recv)

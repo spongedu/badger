@@ -356,7 +356,7 @@ func (s *levelsController) compactBuildTables(
 				// only valid version for a running transaction.
 				numVersions++
 				lastValidVersion := vs.Meta&bitDiscardEarlierVersions > 0
-				if isDeletedOrExpired(vs.Meta, vs.ExpiresAt) ||
+				if isDeleted(vs.Meta) ||
 					numVersions > s.kv.opt.NumVersionsToKeep ||
 					lastValidVersion {
 					// If this version of the key is deleted or expired, skip all the rest of the

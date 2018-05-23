@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/coocood/badger/options"
 
@@ -37,20 +36,19 @@ const (
 // Item is returned during iteration. Both the Key() and Value() output is only valid until
 // iterator.Next() is called.
 type Item struct {
-	status    prefetchStatus
-	err       error
-	wg        sync.WaitGroup
-	db        *DB
-	key       []byte
-	vptr      []byte
-	meta      byte // We need to store meta to know about bitValuePointer.
-	userMeta  byte
-	expiresAt uint64
-	val       []byte
-	slice     *y.Slice // Used only during prefetching.
-	next      *Item
-	version   uint64
-	txn       *Txn
+	status   prefetchStatus
+	err      error
+	wg       sync.WaitGroup
+	db       *DB
+	key      []byte
+	vptr     []byte
+	meta     byte // We need to store meta to know about bitValuePointer.
+	userMeta byte
+	val      []byte
+	slice    *y.Slice // Used only during prefetching.
+	next     *Item
+	version  uint64
+	txn      *Txn
 }
 
 // String returns a string representation of Item
@@ -130,9 +128,9 @@ func (item *Item) hasValue() bool {
 	return true
 }
 
-// IsDeletedOrExpired returns true if item contains deleted or expired value.
-func (item *Item) IsDeletedOrExpired() bool {
-	return isDeletedOrExpired(item.meta, item.expiresAt)
+// IsDeleted returns true if item contains deleted or expired value.
+func (item *Item) IsDeleted() bool {
+	return isDeleted(item.meta)
 }
 
 func (item *Item) DiscardEarlierVersions() bool {
@@ -223,12 +221,6 @@ func (item *Item) EstimatedSize() int64 {
 // is used to interpret the value.
 func (item *Item) UserMeta() byte {
 	return item.userMeta
-}
-
-// ExpiresAt returns a Unix time value indicating when the item will be
-// considered expired. 0 indicates that the item will never expire.
-func (item *Item) ExpiresAt() uint64 {
-	return item.expiresAt
 }
 
 // TODO: Switch this to use linked list container in Go.
@@ -394,14 +386,8 @@ func (it *Iterator) Next() {
 	}
 }
 
-func isDeletedOrExpired(meta byte, expiresAt uint64) bool {
-	if meta&bitDelete > 0 {
-		return true
-	}
-	if expiresAt == 0 {
-		return false
-	}
-	return expiresAt <= uint64(time.Now().Unix())
+func isDeleted(meta byte) bool {
+	return meta&bitDelete > 0
 }
 
 // parseItem is a complex function because it needs to handle both forward and reverse iteration
@@ -463,7 +449,7 @@ func (it *Iterator) parseItem() bool {
 FILL:
 	// If deleted, advance and return.
 	vs := mi.Value()
-	if isDeletedOrExpired(vs.Meta, vs.ExpiresAt) {
+	if isDeleted(vs.Meta) {
 		mi.Next()
 		return false
 	}
@@ -495,7 +481,6 @@ func (it *Iterator) fill(item *Item) {
 	vs := it.iitr.Value()
 	item.meta = vs.Meta
 	item.userMeta = vs.UserMeta
-	item.expiresAt = vs.ExpiresAt
 
 	item.version = y.ParseTs(it.iitr.Key())
 	item.key = y.SafeCopy(item.key, y.ParseKey(it.iitr.Key()))

@@ -27,9 +27,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/coocood/bbloom"
 	"github.com/coocood/badger/options"
 	"github.com/coocood/badger/y"
+	"github.com/coocood/bbloom"
 	"github.com/pkg/errors"
 )
 
