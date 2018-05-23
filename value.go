@@ -907,9 +907,8 @@ func (vlog *valueLog) write(reqs []*request) error {
 // (if non-nil)
 func (vlog *valueLog) getFileRLocked(fid uint32) (*logFile, error) {
 	vlog.filesLock.RLock()
+	defer vlog.filesLock.RUnlock()
 	ret, ok := vlog.filesMap[fid]
-	vlog.filesLock.RUnlock()
-	
 	if !ok {
 		// log file has gone away, will need to retry the operation.
 		return nil, ErrRetry
