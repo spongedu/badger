@@ -21,8 +21,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/coocood/badger/options"
-
 	"github.com/coocood/badger/y"
 	farm "github.com/dgryski/go-farm"
 )
@@ -97,11 +95,7 @@ func (item *Item) Value() ([]byte, error) {
 	if item.status == prefetched {
 		return item.val, item.err
 	}
-	buf, cb, err := item.yieldItemValue()
-	if cb != nil {
-		item.txn.callbacks = append(item.txn.callbacks, cb)
-	}
-	return buf, err
+	return item.yieldItemValue()
 }
 
 // ValueCopy returns a copy of the value of the item from the value log, writing it to dst slice.
@@ -115,8 +109,7 @@ func (item *Item) ValueCopy(dst []byte) ([]byte, error) {
 	if item.status == prefetched {
 		return y.SafeCopy(dst, item.val), item.err
 	}
-	buf, cb, err := item.yieldItemValue()
-	defer runCallback(cb)
+	buf, err := item.yieldItemValue()
 	return y.SafeCopy(dst, buf), err
 }
 
@@ -137,9 +130,9 @@ func (item *Item) DiscardEarlierVersions() bool {
 	return item.meta&bitDiscardEarlierVersions > 0
 }
 
-func (item *Item) yieldItemValue() ([]byte, func(), error) {
+func (item *Item) yieldItemValue() ([]byte, error) {
 	if !item.hasValue() {
-		return nil, nil, nil
+		return nil, nil
 	}
 
 	if item.slice == nil {
@@ -149,55 +142,40 @@ func (item *Item) yieldItemValue() ([]byte, func(), error) {
 	if (item.meta & bitValuePointer) == 0 {
 		val := item.slice.Resize(len(item.vptr))
 		copy(val, item.vptr)
-		return val, nil, nil
+		return val, nil
 	}
 
 	var vp valuePointer
 	vp.Decode(item.vptr)
-	result, cb, err := item.db.vlog.Read(vp, item.slice)
+	result, err := item.db.vlog.Read(vp, item.slice)
 	if err != ErrRetry {
-		return result, cb, err
+		return result, err
 	}
 
 	// The value pointer is pointing to a deleted value log. Look for the move key and read that
 	// instead.
-	runCallback(cb)
 	key := y.KeyWithTs(item.Key(), item.Version())
 	moveKey := append(badgerMove, key...)
 	vs, err := item.db.get(moveKey)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if vs.Version != item.Version() {
-		return nil, nil, nil
+		return nil, nil
 	}
 	item.vptr = vs.Value
 	item.meta |= vs.Meta // This meta would only be about value pointer.
 	return item.yieldItemValue()
 }
 
-func runCallback(cb func()) {
-	if cb != nil {
-		cb()
-	}
-}
-
 func (item *Item) prefetchValue() {
-	val, cb, err := item.yieldItemValue()
-	defer runCallback(cb)
-
+	val, err := item.yieldItemValue()
 	item.err = err
 	item.status = prefetched
 	if val == nil {
 		return
 	}
-	if item.db.opt.ValueLogLoadingMode == options.MemoryMap {
-		buf := item.slice.Resize(len(val))
-		copy(buf, val)
-		item.val = buf
-	} else {
-		item.val = val
-	}
+	item.val = val
 }
 
 // EstimatedSize returns approximate size of the key-value pair.

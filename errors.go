@@ -82,10 +82,6 @@ var (
 	// ErrZeroBandwidth is returned if the user passes in zero bandwidth for sequence.
 	ErrZeroBandwidth = errors.New("Bandwidth must be greater than zero")
 
-	// ErrInvalidLoadingMode is returned when opt.ValueLogLoadingMode option is not
-	// within the valid range
-	ErrInvalidLoadingMode = errors.New("Invalid ValueLogLoadingMode, must be FileIO or MemoryMap")
-
 	// ErrReplayNeeded is returned when opt.ReadOnly is set but the
 	// database requires a value log replay.
 	ErrReplayNeeded = errors.New("Database was not properly closed, cannot open read-only")
