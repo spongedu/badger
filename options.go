@@ -111,7 +111,7 @@ var DefaultOptions = Options{
 	LevelOneSize:        256 << 20,
 	LevelSizeMultiplier: 10,
 	TableLoadingMode:    options.LoadToRAM,
-	ValueLogLoadingMode: options.MemoryMap,
+	ValueLogLoadingMode: options.FileIO,
 	// table.MemoryMap to mmap() the tables.
 	// table.Nothing to not preload the tables.
 	MaxLevels:               7,
@@ -122,12 +122,10 @@ var DefaultOptions = Options{
 	NumMemtables:            5,
 	SyncWrites:              true,
 	NumVersionsToKeep:       1,
-	// Nothing to read/write value log using standard File I/O
-	// MemoryMap to mmap() the value log files
-	ValueLogFileSize:   1 << 30,
-	ValueLogMaxEntries: 1000000,
-	ValueThreshold:     32,
-	Truncate:           false,
+	ValueLogFileSize:        1 << 30,
+	ValueLogMaxEntries:      1000000,
+	ValueThreshold:          32,
+	Truncate:                false,
 }
 
 // LSMOnlyOptions follows from DefaultOptions, but sets a higher ValueThreshold so values would

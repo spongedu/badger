@@ -27,8 +27,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coocood/badger/options"
-
 	"golang.org/x/net/trace"
 
 	"github.com/coocood/badger/skl"
@@ -224,10 +222,6 @@ func Open(opt Options) (db *DB, err error) {
 	if !(opt.ValueLogFileSize <= 2<<30 && opt.ValueLogFileSize >= 1<<20) {
 		return nil, ErrValueLogSize
 	}
-	if !(opt.ValueLogLoadingMode == options.FileIO ||
-		opt.ValueLogLoadingMode == options.MemoryMap) {
-		return nil, ErrInvalidLoadingMode
-	}
 	manifestFile, manifest, err := openOrCreateManifestFile(opt.Dir, opt.ReadOnly)
 	if err != nil {
 		return nil, err
@@ -310,12 +304,6 @@ func Open(opt Options) (db *DB, err error) {
 	replayCloser.SignalAndWait() // Wait for replay to be applied first.
 	// Now that we have the curRead, we can update the nextCommit.
 	db.orc.nextCommit = db.orc.curRead + 1
-
-	// Mmap writable log
-	lf := db.vlog.filesMap[db.vlog.maxFid]
-	if err = lf.mmap(2 * db.vlog.opt.ValueLogFileSize); err != nil {
-		return db, errors.Wrapf(err, "Unable to mmap RDWR log file")
-	}
 
 	db.writeCh = make(chan *request, kvWriteChCapacity)
 	db.closers.writes = y.NewCloser(1)
