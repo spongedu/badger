@@ -60,11 +60,17 @@ type blockIterator struct {
 func (itr *blockIterator) Reset() {
 	itr.pos = 0
 	itr.err = nil
-	itr.baseKey = []byte{}
-	itr.key = []byte{}
-	itr.val = []byte{}
+	itr.baseKey = itr.baseKey[:0]
+	itr.key = itr.key[:0]
+	itr.val = itr.val[:0]
 	itr.init = false
 	itr.last = header{}
+}
+
+func (itr *blockIterator) SetBlock(b block) {
+	itr.Reset()
+	itr.data = b.data
+	itr.loadEntryIndex()
 }
 
 func (itr *blockIterator) Init() {
@@ -183,15 +189,9 @@ func (itr *blockIterator) SeekToLast() {
 
 // parseKV would allocate a new byte slice for key and for value.
 func (itr *blockIterator) parseKV(h header) {
-	if cap(itr.key) < int(h.plen+h.klen) {
-		sz := int(h.plen) + int(h.klen) // Convert to int before adding to avoid uint16 overflow.
-		itr.key = make([]byte, 2*sz)
-	}
-	itr.key = itr.key[:h.plen+h.klen]
-	copy(itr.key, itr.baseKey[:h.plen])
-	copy(itr.key[h.plen:], itr.data[itr.pos:itr.pos+uint32(h.klen)])
+	itr.key = append(itr.key[:0], itr.baseKey[:h.plen]...)
+	itr.key = append(itr.key, itr.data[itr.pos:itr.pos+uint32(h.klen)]...)
 	itr.pos += uint32(h.klen)
-
 	if itr.pos+uint32(h.vlen) > uint32(len(itr.data)) {
 		itr.err = errors.Errorf("Value exceeded size of block: %d %d %d %d %v",
 			itr.pos, h.klen, h.vlen, len(itr.data), h)
@@ -268,7 +268,7 @@ func (itr *blockIterator) Value() []byte {
 type Iterator struct {
 	t    *Table
 	bpos int
-	bi   *blockIterator
+	bi   blockIterator
 	err  error
 
 	// Internally, Iterator is bidirectional. However, we only expose the
@@ -311,7 +311,7 @@ func (itr *Iterator) seekToFirst() {
 		itr.err = err
 		return
 	}
-	itr.bi = block.NewIterator()
+	itr.bi.SetBlock(block)
 	itr.bi.SeekToFirst()
 	itr.err = itr.bi.Error()
 }
@@ -328,7 +328,7 @@ func (itr *Iterator) seekToLast() {
 		itr.err = err
 		return
 	}
-	itr.bi = block.NewIterator()
+	itr.bi.SetBlock(block)
 	itr.bi.SeekToLast()
 	itr.err = itr.bi.Error()
 }
@@ -340,7 +340,7 @@ func (itr *Iterator) seekHelper(blockIdx int, key []byte) {
 		itr.err = err
 		return
 	}
-	itr.bi = block.NewIterator()
+	itr.bi.SetBlock(block)
 	itr.bi.Seek(key, origin)
 	itr.err = itr.bi.Error()
 }
@@ -407,13 +407,13 @@ func (itr *Iterator) next() {
 		return
 	}
 
-	if itr.bi == nil {
+	if itr.bi.data == nil {
 		block, err := itr.t.block(itr.bpos)
 		if err != nil {
 			itr.err = err
 			return
 		}
-		itr.bi = block.NewIterator()
+		itr.bi.SetBlock(block)
 		itr.bi.SeekToFirst()
 		itr.err = itr.bi.Error()
 		return
@@ -422,7 +422,7 @@ func (itr *Iterator) next() {
 	itr.bi.Next()
 	if !itr.bi.Valid() {
 		itr.bpos++
-		itr.bi = nil
+		itr.bi.data = nil
 		itr.next()
 		return
 	}
@@ -435,13 +435,13 @@ func (itr *Iterator) prev() {
 		return
 	}
 
-	if itr.bi == nil {
+	if itr.bi.data == nil {
 		block, err := itr.t.block(itr.bpos)
 		if err != nil {
 			itr.err = err
 			return
 		}
-		itr.bi = block.NewIterator()
+		itr.bi.SetBlock(block)
 		itr.bi.SeekToLast()
 		itr.err = itr.bi.Error()
 		return
@@ -450,7 +450,7 @@ func (itr *Iterator) prev() {
 	itr.bi.Prev()
 	if !itr.bi.Valid() {
 		itr.bpos--
-		itr.bi = nil
+		itr.bi.data = nil
 		itr.prev()
 		return
 	}
@@ -506,13 +506,9 @@ type ConcatIterator struct {
 
 // NewConcatIterator creates a new concatenated iterator
 func NewConcatIterator(tbls []*Table, reversed bool) *ConcatIterator {
-	iters := make([]*Iterator, len(tbls))
-	for i := 0; i < len(tbls); i++ {
-		iters[i] = tbls[i].NewIterator(reversed)
-	}
 	return &ConcatIterator{
 		reversed: reversed,
-		iters:    iters,
+		iters:    make([]*Iterator, len(tbls)),
 		tables:   tbls,
 		idx:      -1, // Not really necessary because s.it.Valid()=false, but good to have.
 	}
@@ -523,6 +519,9 @@ func (s *ConcatIterator) setIdx(idx int) {
 	if idx < 0 || idx >= len(s.iters) {
 		s.cur = nil
 	} else {
+		if s.iters[s.idx] == nil {
+			s.iters[s.idx] = s.tables[idx].NewIterator(s.reversed)
+		}
 		s.cur = s.iters[s.idx]
 	}
 }
@@ -605,6 +604,9 @@ func (s *ConcatIterator) Next() {
 // Close implements y.Interface.
 func (s *ConcatIterator) Close() error {
 	for _, it := range s.iters {
+		if it == nil {
+			continue
+		}
 		if err := it.Close(); err != nil {
 			return errors.Wrap(err, "ConcatIterator")
 		}
