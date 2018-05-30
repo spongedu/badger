@@ -506,6 +506,9 @@ type ConcatIterator struct {
 
 // NewConcatIterator creates a new concatenated iterator
 func NewConcatIterator(tbls []*Table, reversed bool) *ConcatIterator {
+	for _, t := range tbls {
+		t.IncrRef()
+	}
 	return &ConcatIterator{
 		reversed: reversed,
 		iters:    make([]*Iterator, len(tbls)),
@@ -520,7 +523,10 @@ func (s *ConcatIterator) setIdx(idx int) {
 		s.cur = nil
 	} else {
 		if s.iters[s.idx] == nil {
-			s.iters[s.idx] = s.tables[idx].NewIterator(s.reversed)
+			// We already increased table refs, so init without IncrRef here
+			ti := &Iterator{t: s.tables[s.idx], reversed: s.reversed}
+			ti.next()
+			s.iters[s.idx] = ti
 		}
 		s.cur = s.iters[s.idx]
 	}
@@ -603,13 +609,8 @@ func (s *ConcatIterator) Next() {
 
 // Close implements y.Interface.
 func (s *ConcatIterator) Close() error {
-	for _, it := range s.iters {
-		if it == nil {
-			continue
-		}
-		if err := it.Close(); err != nil {
-			return errors.Wrap(err, "ConcatIterator")
-		}
+	for _, t := range s.tables {
+		t.DecrRef()
 	}
 	return nil
 }
