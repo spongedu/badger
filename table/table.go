@@ -97,12 +97,6 @@ type block struct {
 	data   []byte
 }
 
-func (b block) NewIterator() *blockIterator {
-	bi := &blockIterator{data: b.data}
-	bi.loadEntryIndex()
-	return bi
-}
-
 // OpenTable assumes file has only one table and opens it.  Takes ownership of fd upon function
 // entry.  Returns a table with one reference count on it (decrementing which may delete the file!
 // -- consider t.Close() instead).  The fd has to writeable because we call Truncate on it before
