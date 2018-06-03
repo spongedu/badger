@@ -36,7 +36,6 @@ import (
 	"time"
 
 	"github.com/coocood/badger/options"
-
 	"github.com/coocood/badger/y"
 	"github.com/pkg/errors"
 	"golang.org/x/net/trace"

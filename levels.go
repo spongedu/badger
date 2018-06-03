@@ -323,7 +323,7 @@ func (s *levelsController) compactBuildTables(
 	var lastKey, skipKey []byte
 	for it.Valid() {
 		timeStart := time.Now()
-		builder := table.NewTableBuilder()
+		builder := table.NewTableBuilder(s.kv.opt.MaxTableSize)
 		var numKeys, numSkips uint64
 		for ; it.Valid(); it.Next() {
 			// See if we need to skip this key.

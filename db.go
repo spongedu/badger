@@ -762,7 +762,7 @@ func arenaSize(opt Options) int64 {
 func writeLevel0Table(s *skl.Skiplist, f *os.File) error {
 	iter := s.NewIterator()
 	defer iter.Close()
-	b := table.NewTableBuilder()
+	b := table.NewTableBuilder(s.MemSize())
 	defer b.Close()
 	for iter.SeekToFirst(); iter.Valid(); iter.Next() {
 		if err := b.Add(iter.Key(), iter.Value()); err != nil {

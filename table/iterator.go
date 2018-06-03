@@ -20,66 +20,34 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
-	"math"
 	"sort"
 
 	"github.com/coocood/badger/y"
-	"github.com/pkg/errors"
 )
 
 type blockIterator struct {
 	data    []byte
-	pos     uint32
+	idx     int
 	err     error
 	baseKey []byte
 
-	key  []byte
-	val  []byte
-	init bool
+	key []byte
+	val []byte
 
-	last header // The last header we saw.
-
-	// Raw bytes with the entry offsets. The offsets are parsed
-	// on demand instead of parsing the entire array during initialization
-	// (in a similar way to the table's `readIndex`), this is becuase
-	// the blocks (unlike the tables) are discarded on every seek
-	// operation.
-	// The `data` buffer now contains the entry index (besides the
-	// key-vaue entries), it's length is still used as an indication
-	// of the number of entries, so to avoid modifying that code the
-	// entry index is moved away to another slice.
-	// TODO: Modify the use of `len(data)`, use the entry index to
-	// know the number of entries.
-	entryIndex []byte
-
-	// Number of entries in the block (which is just the size
-	// of entryIndex divided by 4).
-	entriesNum uint32
+	entryEndOffsets []uint32
 }
 
-func (itr *blockIterator) Reset() {
-	itr.pos = 0
+func (itr *blockIterator) setBlock(b block) {
 	itr.err = nil
+	itr.idx = 0
 	itr.baseKey = itr.baseKey[:0]
 	itr.key = itr.key[:0]
 	itr.val = itr.val[:0]
-	itr.init = false
-	itr.last = header{}
-}
-
-func (itr *blockIterator) SetBlock(b block) {
-	itr.Reset()
 	itr.data = b.data
-	itr.loadEntryIndex()
+	itr.loadEntryEndOffsets()
 }
 
-func (itr *blockIterator) Init() {
-	if !itr.init {
-		itr.Next()
-	}
-}
-
-func (itr *blockIterator) Valid() bool {
+func (itr *blockIterator) valid() bool {
 	return itr != nil && itr.err == nil
 }
 
@@ -87,167 +55,72 @@ func (itr *blockIterator) Error() error {
 	return itr.err
 }
 
-func (itr *blockIterator) Close() {}
-
-var (
-	origin  = 0
-	current = 1
-)
-
-// loadEntryIndex loads the entry index into `entryIndex` to separate
-// it from the rest of `data` adjusting its length (see `entryIndex`).
-// The index is loaded and only its length is parsed, the rest will
-// be process by a lazy-initialization in `readEntryIndex`.
-func (itr *blockIterator) loadEntryIndex() {
+// loadEntryEndOffsets loads the entryEndOffsets for binary searching for a key.
+func (itr *blockIterator) loadEntryEndOffsets() {
 	// Get the number of entries from the end of `data` (and remove it).
-	itr.entriesNum = binary.BigEndian.Uint32(itr.data[(len(itr.data) - 4):len(itr.data)])
-	itr.data = itr.data[:(len(itr.data) - 4)]
-
-	// Move the index from `data` to `entryIndex`.
-	itr.entryIndex = itr.data[(len(itr.data) - int(itr.entriesNum)*4):len(itr.data)]
-	itr.data = itr.data[:(len(itr.data) - int(itr.entriesNum)*4)]
-}
-
-// getEntryOffset retrieves the offset of the entry of the given `idx`.
-// The value is computed in the moment and is not cached because the block
-// (and it's iterator) will be discarded in the next table's `seekFrom`.
-func (itr *blockIterator) getEntryOffset(idx int) uint32 {
-	return binary.BigEndian.Uint32(itr.entryIndex[4*idx : 4*(idx+1)])
+	off := len(itr.data) - 4
+	entriesNum := int(binary.LittleEndian.Uint32(itr.data[off:]))
+	itr.data = itr.data[:off]
+	off = len(itr.data) - entriesNum*4
+	itr.entryEndOffsets = bytesToU32Slice(itr.data[off:])
+	itr.data = itr.data[:off]
 }
 
 // Seek brings us to the first block element that is >= input key.
-func (itr *blockIterator) Seek(key []byte, whence int) {
+func (itr *blockIterator) seek(key []byte) {
 	itr.err = nil
-
-	switch whence {
-	case origin:
-		itr.Reset()
-	case current:
-	}
-
-	itr.Init()
-
-	foundEntryIdx := sort.Search(int(itr.entriesNum), func(idx int) bool {
-		entryOffset := itr.getEntryOffset(idx)
-
-		// Mimic the code executed by `Next` to modify the the rest
-		// of the iterator behavior as less as possible (at this point)
-		// TODO: `Next` and related should use the entry index and
-		// this duplication of code won't be necessary.
-		itr.pos = entryOffset
-		itr.err = nil
-		var h header
-		itr.pos += uint32(h.Decode(itr.data[itr.pos:]))
-		itr.last = h // Store the last header.
-
-		// Populate baseKey if it isn't set yet. This would only happen for the first Next.
-		if len(itr.baseKey) == 0 {
-			panic("len(itr.baseKey) == 0")
-		}
-
-		itr.parseKV(h)
-
-		k := itr.Key()
-		if y.CompareKeys(k, key) >= 0 {
-			return true
-		}
-		return false
+	foundEntryIdx := sort.Search(len(itr.entryEndOffsets), func(idx int) bool {
+		itr.setIdx(idx)
+		return y.CompareKeys(itr.Key(), key) >= 0
 	})
-
-	if foundEntryIdx < int(itr.entriesNum) {
-		// Found the entry, set the position there and parse it.
-		itr.pos = itr.getEntryOffset(foundEntryIdx)
-		itr.Next()
-	} else {
-		// It didn't find it, simulate the linear search behavior by going
-		// to the last (dummy) entry. That entry is not stored in
-		// `entryOffsets` (which has the entries up until the last valid
-		// one), so go to the end of the array and advance with `Next`
-		// two times, read the last valid entry and attempt to read
-		// the dummy one that will set the corresponding EOF error
-		// (to signal the key was not found).
-		// TODO: Remove this once `Next` is adjusted to use the
-		// entry index.
-		itr.pos = itr.getEntryOffset(int(itr.entriesNum) - 1)
-		itr.Next()
-		itr.Next()
-	}
+	itr.setIdx(foundEntryIdx)
 }
 
-func (itr *blockIterator) SeekToFirst() {
+// seekToFirst brings us to the first element. Valid should return true.
+func (itr *blockIterator) seekToFirst() {
 	itr.err = nil
-	itr.Init()
+	itr.setIdx(0)
 }
 
-// SeekToLast brings us to the last element. Valid should return true.
-func (itr *blockIterator) SeekToLast() {
+// seekToLast brings us to the last element. Valid should return true.
+func (itr *blockIterator) seekToLast() {
 	itr.err = nil
-	for itr.Init(); itr.Valid(); itr.Next() {
-	}
-	itr.Prev()
+	itr.setIdx(len(itr.entryEndOffsets) - 1)
 }
 
-// parseKV would allocate a new byte slice for key and for value.
-func (itr *blockIterator) parseKV(h header) {
-	itr.key = append(itr.key[:0], itr.baseKey[:h.plen]...)
-	itr.key = append(itr.key, itr.data[itr.pos:itr.pos+uint32(h.klen)]...)
-	itr.pos += uint32(h.klen)
-	if itr.pos+uint32(h.vlen) > uint32(len(itr.data)) {
-		itr.err = errors.Errorf("Value exceeded size of block: %d %d %d %d %v",
-			itr.pos, h.klen, h.vlen, len(itr.data), h)
-		return
-	}
-	itr.val = itr.data[itr.pos : itr.pos+uint32(h.vlen)]
-	itr.pos += uint32(h.vlen)
-}
-
-func (itr *blockIterator) Next() {
-	itr.init = true
-	itr.err = nil
-	if itr.pos >= uint32(len(itr.data)) {
+// setIdx sets the iterator to the entry index and set the current key and value.
+func (itr *blockIterator) setIdx(i int) {
+	if i >= len(itr.entryEndOffsets) || i < 0 {
 		itr.err = io.EOF
 		return
 	}
-
+	itr.err = nil
+	itr.idx = i
+	var startOffset int
+	if i > 0 {
+		startOffset = int(itr.entryEndOffsets[i-1])
+	}
+	endOffset := int(itr.entryEndOffsets[i])
 	var h header
-	itr.pos += uint32(h.Decode(itr.data[itr.pos:]))
-	itr.last = h // Store the last header.
-
-	if h.klen == 0 && h.plen == 0 {
-		// Last entry in the table.
-		itr.err = io.EOF
-		return
-	}
-
-	// Populate baseKey if it isn't set yet. This would only happen for the first Next.
+	h.Decode(itr.data[startOffset:])
 	if len(itr.baseKey) == 0 {
-		// This should be the first Next() for this block. Hence, prefix length should be zero.
-		y.AssertTrue(h.plen == 0)
-		itr.baseKey = itr.data[itr.pos : itr.pos+uint32(h.klen)]
+		var baseHeader header
+		baseHeader.Decode(itr.data)
+		itr.baseKey = itr.data[headerSize : headerSize+baseHeader.klen]
 	}
-	itr.parseKV(h)
+	prefixKey := itr.baseKey[:h.plen]
+	itr.key = append(itr.key[:0], prefixKey...)
+	diffKey := itr.data[startOffset+headerSize : startOffset+headerSize+int(h.klen)]
+	itr.key = append(itr.key, diffKey...)
+	itr.val = itr.data[startOffset+headerSize+int(h.klen) : endOffset]
 }
 
-func (itr *blockIterator) Prev() {
-	if !itr.init {
-		return
-	}
-	itr.err = nil
-	if itr.last.prev == math.MaxUint32 {
-		// This is the first element of the block!
-		itr.err = io.EOF
-		itr.pos = 0
-		return
-	}
+func (itr *blockIterator) next() {
+	itr.setIdx(itr.idx + 1)
+}
 
-	// Move back using current header's prev.
-	itr.pos = itr.last.prev
-
-	var h header
-	y.AssertTruef(itr.pos < uint32(len(itr.data)), "%d %d", itr.pos, len(itr.data))
-	itr.pos += uint32(h.Decode(itr.data[itr.pos:]))
-	itr.parseKV(h)
-	itr.last = h
+func (itr *blockIterator) prev() {
+	itr.setIdx(itr.idx - 1)
 }
 
 func (itr *blockIterator) Key() []byte {
@@ -280,7 +153,6 @@ type Iterator struct {
 func (t *Table) NewIterator(reversed bool) *Iterator {
 	t.IncrRef() // Important.
 	ti := &Iterator{t: t, reversed: reversed}
-	ti.next()
 	return ti
 }
 
@@ -300,7 +172,7 @@ func (itr *Iterator) Valid() bool {
 }
 
 func (itr *Iterator) seekToFirst() {
-	numBlocks := len(itr.t.blockIndex)
+	numBlocks := len(itr.t.blockEndOffsets)
 	if numBlocks == 0 {
 		itr.err = io.EOF
 		return
@@ -311,13 +183,13 @@ func (itr *Iterator) seekToFirst() {
 		itr.err = err
 		return
 	}
-	itr.bi.SetBlock(block)
-	itr.bi.SeekToFirst()
+	itr.bi.setBlock(block)
+	itr.bi.seekToFirst()
 	itr.err = itr.bi.Error()
 }
 
 func (itr *Iterator) seekToLast() {
-	numBlocks := len(itr.t.blockIndex)
+	numBlocks := len(itr.t.blockEndOffsets)
 	if numBlocks == 0 {
 		itr.err = io.EOF
 		return
@@ -328,8 +200,8 @@ func (itr *Iterator) seekToLast() {
 		itr.err = err
 		return
 	}
-	itr.bi.SetBlock(block)
-	itr.bi.SeekToLast()
+	itr.bi.setBlock(block)
+	itr.bi.seekToLast()
 	itr.err = itr.bi.Error()
 }
 
@@ -340,23 +212,24 @@ func (itr *Iterator) seekHelper(blockIdx int, key []byte) {
 		itr.err = err
 		return
 	}
-	itr.bi.SetBlock(block)
-	itr.bi.Seek(key, origin)
+	itr.bi.setBlock(block)
+	itr.bi.seek(key)
 	itr.err = itr.bi.Error()
 }
 
 // seekFrom brings us to a key that is >= input key.
-func (itr *Iterator) seekFrom(key []byte, whence int) {
+func (itr *Iterator) seekFrom(key []byte) {
 	itr.err = nil
-	switch whence {
-	case origin:
-		itr.reset()
-	case current:
-	}
+	itr.reset()
 
-	idx := sort.Search(len(itr.t.blockIndex), func(idx int) bool {
-		ko := itr.t.blockIndex[idx]
-		return y.CompareKeys(ko.key, key) > 0
+	idx := sort.Search(len(itr.t.blockEndOffsets), func(idx int) bool {
+		baseKeyStartOff := 0
+		if idx > 0 {
+			baseKeyStartOff = int(itr.t.baseKeysEndOffs[idx-1])
+		}
+		baseKeyEndOff := itr.t.baseKeysEndOffs[idx]
+		baseKey := itr.t.baseKeys[baseKeyStartOff:baseKeyEndOff]
+		return y.CompareKeys(baseKey, key) > 0
 	})
 	if idx == 0 {
 		// The smallest key in our table is already strictly > key. We can return that.
@@ -374,8 +247,8 @@ func (itr *Iterator) seekFrom(key []byte, whence int) {
 	itr.seekHelper(idx-1, key)
 	if itr.err == io.EOF {
 		// Case 1. Need to visit block[idx].
-		if idx == len(itr.t.blockIndex) {
-			// If idx == len(itr.t.blockIndex), then input key is greater than ANY element of table.
+		if idx == len(itr.t.blockEndOffsets) {
+			// If idx == len(itr.t.blockEndOffsets), then input key is greater than ANY element of table.
 			// There's nothing we can do. Valid() should return false as we seek to end of table.
 			return
 		}
@@ -387,13 +260,13 @@ func (itr *Iterator) seekFrom(key []byte, whence int) {
 
 // seek will reset iterator and seek to >= key.
 func (itr *Iterator) seek(key []byte) {
-	itr.seekFrom(key, origin)
+	itr.seekFrom(key)
 }
 
 // seekForPrev will reset iterator and seek to <= key.
 func (itr *Iterator) seekForPrev(key []byte) {
 	// TODO: Optimize this. We shouldn't have to take a Prev step.
-	itr.seekFrom(key, origin)
+	itr.seekFrom(key)
 	if !bytes.Equal(itr.Key(), key) {
 		itr.prev()
 	}
@@ -402,7 +275,7 @@ func (itr *Iterator) seekForPrev(key []byte) {
 func (itr *Iterator) next() {
 	itr.err = nil
 
-	if itr.bpos >= len(itr.t.blockIndex) {
+	if itr.bpos >= len(itr.t.blockEndOffsets) {
 		itr.err = io.EOF
 		return
 	}
@@ -413,14 +286,14 @@ func (itr *Iterator) next() {
 			itr.err = err
 			return
 		}
-		itr.bi.SetBlock(block)
-		itr.bi.SeekToFirst()
+		itr.bi.setBlock(block)
+		itr.bi.seekToFirst()
 		itr.err = itr.bi.Error()
 		return
 	}
 
-	itr.bi.Next()
-	if !itr.bi.Valid() {
+	itr.bi.next()
+	if !itr.bi.valid() {
 		itr.bpos++
 		itr.bi.data = nil
 		itr.next()
@@ -441,14 +314,14 @@ func (itr *Iterator) prev() {
 			itr.err = err
 			return
 		}
-		itr.bi.SetBlock(block)
-		itr.bi.SeekToLast()
+		itr.bi.setBlock(block)
+		itr.bi.seekToLast()
 		itr.err = itr.bi.Error()
 		return
 	}
 
-	itr.bi.Prev()
-	if !itr.bi.Valid() {
+	itr.bi.prev()
+	if !itr.bi.valid() {
 		itr.bpos--
 		itr.bi.data = nil
 		itr.prev()
