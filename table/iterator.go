@@ -18,7 +18,6 @@ package table
 
 import (
 	"bytes"
-	"encoding/binary"
 	"io"
 	"sort"
 
@@ -59,7 +58,7 @@ func (itr *blockIterator) Error() error {
 func (itr *blockIterator) loadEntryEndOffsets() {
 	// Get the number of entries from the end of `data` (and remove it).
 	off := len(itr.data) - 4
-	entriesNum := int(binary.LittleEndian.Uint32(itr.data[off:]))
+	entriesNum := int(bytesToU32(itr.data[off:]))
 	itr.data = itr.data[:off]
 	off = len(itr.data) - entriesNum*4
 	itr.entryEndOffsets = bytesToU32Slice(itr.data[off:])

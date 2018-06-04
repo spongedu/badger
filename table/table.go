@@ -17,7 +17,6 @@
 package table
 
 import (
-	"encoding/binary"
 	"fmt"
 	"os"
 	"path"
@@ -190,14 +189,14 @@ func (t *Table) readIndex() {
 	// Read bloom filter.
 	readPos -= 4
 	buf := t.readNoFail(readPos, 4)
-	bloomLen := int(binary.LittleEndian.Uint32(buf))
+	bloomLen := int(bytesToU32(buf))
 	readPos -= bloomLen
 	data := t.readNoFail(readPos, bloomLen)
 	t.bf.BinaryUnmarshal(data)
 
 	readPos -= 4
 	buf = t.readNoFail(readPos, 4)
-	numBlocks := int(binary.LittleEndian.Uint32(buf))
+	numBlocks := int(bytesToU32(buf))
 
 	readPos -= 4 * numBlocks
 	buf = t.readNoFail(readPos, 4*numBlocks)

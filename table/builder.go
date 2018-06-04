@@ -158,12 +158,12 @@ func (b *Builder) Add(key []byte, value y.ValueStruct) error {
 // at the end. The diff can vary.
 
 // ReachedCapacity returns true if we... roughly (?) reached capacity?
-func (b *Builder) ReachedCapacity(cap int64) bool {
+func (b *Builder) ReachedCapacity(capacity int64) bool {
 	estimateSz := len(b.buf) +
 		4*len(b.blockEndOffsets) +
 		len(b.baseKeysBuf) +
 		4*len(b.baseKeysEndOffs)
-	return int64(estimateSz) > cap
+	return int64(estimateSz) > capacity
 }
 
 // Finish finishes the table by appending the index.
@@ -203,4 +203,8 @@ func bytesToU32Slice(b []byte) []uint32 {
 	hdr.Cap = hdr.Len
 	hdr.Data = uintptr(unsafe.Pointer(&b[0]))
 	return u32s
+}
+
+func bytesToU32(b []byte) uint32 {
+	return binary.LittleEndian.Uint32(b)
 }
