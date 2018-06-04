@@ -336,7 +336,7 @@ func (s *Skiplist) Put(key []byte, v y.ValueStruct) {
 			// because it is unlikely that lots of nodes are inserted between prev[i] and next[i].
 			prev[i], next[i] = s.findSpliceForLevel(key, prev[i], i)
 			if prev[i] == next[i] {
-				y.AssertTruef(i == 0, "Equality can happen only on base level: %d", i)
+				y.AssertTrue(i == 0)
 				prev[i].setValue(s.arena, v)
 				return
 			}

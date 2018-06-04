@@ -17,81 +17,66 @@
 package table
 
 import (
-	"bytes"
 	"encoding/binary"
-	"io"
-	"math"
+	"reflect"
+	"unsafe"
 
 	"github.com/coocood/badger/y"
 	"github.com/coocood/bbloom"
 )
 
-var (
-	restartInterval = 100 // Might want to change this to be based on total size instead of numKeys.
-)
-
-func newBuffer(sz int) *bytes.Buffer {
-	b := new(bytes.Buffer)
-	b.Grow(sz)
-	return b
-}
+const restartInterval = 256 // Might want to change this to be based on total size instead of numKeys.
 
 type header struct {
 	plen uint16 // Overlap with base key.
 	klen uint16 // Length of the diff.
-	vlen uint16 // Length of value.
-	prev uint32 // Offset for the previous key-value pair. The offset is relative to block base offset.
 }
 
 // Encode encodes the header.
-func (h header) Encode(b []byte) {
-	binary.BigEndian.PutUint16(b[0:2], h.plen)
-	binary.BigEndian.PutUint16(b[2:4], h.klen)
-	binary.BigEndian.PutUint16(b[4:6], h.vlen)
-	binary.BigEndian.PutUint32(b[6:10], h.prev)
+func (h header) Encode() []byte {
+	var b [4]byte
+	*(*header)(unsafe.Pointer(&b[0])) = h
+	return b[:]
 }
 
 // Decode decodes the header.
-func (h *header) Decode(buf []byte) int {
-	h.plen = binary.BigEndian.Uint16(buf[0:2])
-	h.klen = binary.BigEndian.Uint16(buf[2:4])
-	h.vlen = binary.BigEndian.Uint16(buf[4:6])
-	h.prev = binary.BigEndian.Uint32(buf[6:10])
-	return h.Size()
+func (h *header) Decode(buf []byte) {
+	*h = *(*header)(unsafe.Pointer(&buf[0]))
 }
 
-// Size returns size of the header. Currently it's just a constant.
-func (h header) Size() int { return 10 }
+const headerSize = 4
 
 // Builder is used in building a table.
 type Builder struct {
 	counter int // Number of keys written for the current block.
 
 	// Typically tens or hundreds of meg. This is for one single file.
-	buf *bytes.Buffer
+	buf []byte
 
-	baseKey    []byte // Base key for the current block.
-	baseOffset uint32 // Offset for the current block.
+	baseKeysBuf     []byte
+	baseKeysEndOffs []uint32
 
-	restarts []uint32 // Base offsets of every block.
+	blockBaseKey    []byte // Base key for the current block.
+	blockBaseOffset uint32 // Offset for the current block.
 
-	// Offsets of every entry within the current block being built.
+	blockEndOffsets []uint32 // Base offsets of every block.
+
+	// end offsets of every entry within the current block being built.
 	// The offsets are relative to the start of the block.
-	entryOffsets []uint32
+	entryEndOffsets []uint32
 
-	// Tracks offset for the previous key-value pair. Offset is relative to block base offset.
-	prevOffset uint32
-
-	keyBuf   *bytes.Buffer
-	keyCount int
+	bloomFilter bbloom.Bloom
 }
 
 // NewTableBuilder makes a new TableBuilder.
-func NewTableBuilder() *Builder {
+// The initCap is used to avoid memory reallocation.
+func NewTableBuilder(initCap int64) *Builder {
+	assumeKeyNum := 256 * 1024
 	return &Builder{
-		keyBuf:     newBuffer(1 << 20),
-		buf:        newBuffer(1 << 20),
-		prevOffset: math.MaxUint32, // Used for the first element!
+		buf:         make([]byte, 0, initCap),
+		baseKeysBuf: make([]byte, 0, assumeKeyNum/restartInterval),
+		// assume a large enough num of keys to init bloom filter.
+		bloomFilter: bbloom.New(float64(assumeKeyNum), 0.01),
 	}
 }
 
@@ -99,13 +84,13 @@ func NewTableBuilder() *Builder {
 func (b *Builder) Close() {}
 
 // Empty returns whether it's empty.
-func (b *Builder) Empty() bool { return b.buf.Len() == 0 }
+func (b *Builder) Empty() bool { return len(b.buf) == 0 }
 
-// keyDiff returns a suffix of newKey that is different from b.baseKey.
+// keyDiff returns a suffix of newKey that is different from b.blockBaseKey.
 func (b Builder) keyDiff(newKey []byte) []byte {
 	var i int
-	for i = 0; i < len(newKey) && i < len(b.baseKey); i++ {
-		if newKey[i] != b.baseKey[i] {
+	for i = 0; i < len(newKey) && i < len(b.blockBaseKey); i++ {
+		if newKey[i] != b.blockBaseKey[i] {
 			break
 		}
 	}
@@ -115,20 +100,16 @@ func (b Builder) keyDiff(newKey []byte) []byte {
 func (b *Builder) addHelper(key []byte, v y.ValueStruct) {
 	// Add key to bloom filter.
 	if len(key) > 0 {
-		var klen [2]byte
 		keyNoTs := y.ParseKey(key)
-		binary.BigEndian.PutUint16(klen[:], uint16(len(keyNoTs)))
-		b.keyBuf.Write(klen[:])
-		b.keyBuf.Write(keyNoTs)
-		b.keyCount++
+		b.bloomFilter.Add(keyNoTs)
 	}
 
-	// diffKey stores the difference of key with baseKey.
+	// diffKey stores the difference of key with blockBaseKey.
 	var diffKey []byte
-	if len(b.baseKey) == 0 {
+	if len(b.blockBaseKey) == 0 {
 		// Make a copy. Builder should not keep references. Otherwise, caller has to be very careful
 		// and will have to make copies of keys every time they add to builder, which is even worse.
-		b.baseKey = append(b.baseKey[:0], key...)
+		b.blockBaseKey = append(b.blockBaseKey[:0], key...)
 		diffKey = key
 	} else {
 		diffKey = b.keyDiff(key)
@@ -137,32 +118,28 @@ func (b *Builder) addHelper(key []byte, v y.ValueStruct) {
 	h := header{
 		plen: uint16(len(key) - len(diffKey)),
 		klen: uint16(len(diffKey)),
-		vlen: uint16(v.EncodedSize()),
-		prev: b.prevOffset, // prevOffset is the location of the last key-value added.
 	}
-	b.prevOffset = uint32(b.buf.Len()) - b.baseOffset // Remember current offset for the next Add call.
-
-	b.entryOffsets = append(b.entryOffsets, uint32(b.buf.Len())-b.baseOffset)
-
-	// Layout: header, diffKey, value.
-	var hbuf [10]byte
-	h.Encode(hbuf[:])
-	b.buf.Write(hbuf[:])
-	b.buf.Write(diffKey) // We only need to store the key difference.
-
-	v.EncodeTo(b.buf)
+	b.buf = append(b.buf, h.Encode()...)
+	b.buf = append(b.buf, diffKey...) // We only need to store the key difference.
+	b.buf = v.EncodeTo(b.buf)
+	b.entryEndOffsets = append(b.entryEndOffsets, uint32(len(b.buf))-b.blockBaseOffset)
 	b.counter++ // Increment number of keys added for this current block.
 }
 
 func (b *Builder) finishBlock() {
-	// When we are at the end of the block and Valid=false, and the user wants to do a Prev,
-	// we need a dummy header to tell us the offset of the previous key-value pair.
-	b.addHelper([]byte{}, y.ValueStruct{})
+	b.buf = append(b.buf, u32SliceToBytes(b.entryEndOffsets)...)
+	b.buf = append(b.buf, u32ToBytes(uint32(len(b.entryEndOffsets)))...)
+	b.blockEndOffsets = append(b.blockEndOffsets, uint32(len(b.buf)))
 
-	b.buf.Write(b.entryIndex())
-	// Reset the entry offsets of the block for the next build.
-	b.entryOffsets = nil
+	// Add base key.
+	b.baseKeysBuf = append(b.baseKeysBuf, b.blockBaseKey...)
+	b.baseKeysEndOffs = append(b.baseKeysEndOffs, uint32(len(b.baseKeysBuf)))
 
+	// Reset the block for the next build.
+	b.entryEndOffsets = b.entryEndOffsets[:0]
+	b.counter = 0
+	b.blockBaseKey = b.blockBaseKey[:0]
+	b.blockBaseOffset = uint32(len(b.buf))
 }
 
 // Add adds a key-value pair to the block.
@@ -170,12 +147,6 @@ func (b *Builder) finishBlock() {
 func (b *Builder) Add(key []byte, value y.ValueStruct) error {
 	if b.counter >= restartInterval {
 		b.finishBlock()
-		// Start a new block. Initialize the block.
-		b.restarts = append(b.restarts, uint32(b.buf.Len()))
-		b.counter = 0
-		b.baseKey = []byte{}
-		b.baseOffset = uint32(b.buf.Len())
-		b.prevOffset = math.MaxUint32 // First key-value pair of block has header.prev=MaxInt.
 	}
 	b.addHelper(key, value)
 	return nil // Currently, there is no meaningful error.
@@ -187,86 +158,53 @@ func (b *Builder) Add(key []byte, value y.ValueStruct) error {
 // at the end. The diff can vary.
 
 // ReachedCapacity returns true if we... roughly (?) reached capacity?
-func (b *Builder) ReachedCapacity(cap int64) bool {
-	estimateSz := b.buf.Len() + 8 /* empty header */ + 4*len(b.restarts) + 8 // 8 = end of buf offset + len(restarts).
-	return int64(estimateSz) > cap
-}
-
-// blockIndex generates the block index for the table.
-// It is mainly a list of all the block base offsets.
-func (b *Builder) blockIndex() []byte {
-	// Store the end offset, so we know the length of the final block.
-	b.restarts = append(b.restarts, uint32(b.buf.Len()))
-
-	// Add 4 because we want to write out number of restarts at the end.
-	sz := 4*len(b.restarts) + 4
-	out := make([]byte, sz)
-	buf := out
-	for _, r := range b.restarts {
-		binary.BigEndian.PutUint32(buf[:4], r)
-		buf = buf[4:]
-	}
-	binary.BigEndian.PutUint32(buf[:4], uint32(len(b.restarts)))
-	return out
-}
-
-// entryIndex generates the entry index for the block
-// (in a analogous way to `blockIndex`).
-// It is mainly a list of all the entry offsets.
-func (b *Builder) entryIndex() []byte {
-	// Remove the last (dummy) header added in `finishBlock`, it
-	// is used for the reverse iteration system and is not necessary
-	// in the entry offsets vector that will be used by the block iterator's
-	// `seek`.
-	// TODO: Remove this once the `Prev` and related fuctions are modified
-	// to leverage this entry index (and the dummy header is not added anymore).
-	b.entryOffsets = b.entryOffsets[:len(b.entryOffsets)-1]
-
-	// Add 4 because we want to write out the length of the index at the end.
-	index := make([]byte, 4*len(b.entryOffsets)+4)
-	buf := index
-	for _, offset := range b.entryOffsets {
-		binary.BigEndian.PutUint32(buf[:4], offset)
-		buf = buf[4:]
-	}
-	// Write the number of entry offsets (not the number of bytes),
-	// to be read in `loadEntryIndex`.
-	binary.BigEndian.PutUint32(buf[:4], uint32(len(b.entryOffsets)))
-
-	return index
+func (b *Builder) ReachedCapacity(capacity int64) bool {
+	estimateSz := len(b.buf) +
+		4*len(b.blockEndOffsets) +
+		len(b.baseKeysBuf) +
+		4*len(b.baseKeysEndOffs)
+	return int64(estimateSz) > capacity
 }
 
 // Finish finishes the table by appending the index.
 func (b *Builder) Finish() []byte {
-	bf := bbloom.New(float64(b.keyCount), 0.01)
-	var klen [2]byte
-	key := make([]byte, 1024)
-	for {
-		if _, err := b.keyBuf.Read(klen[:]); err == io.EOF {
-			break
-		} else if err != nil {
-			y.Check(err)
-		}
-		kl := int(binary.BigEndian.Uint16(klen[:]))
-		if cap(key) < kl {
-			key = make([]byte, 2*int(kl)) // 2 * uint16 will overflow
-		}
-		key = key[:kl]
-		y.Check2(b.keyBuf.Read(key))
-		bf.Add(key)
-	}
-
 	b.finishBlock() // This will never start a new block.
-	index := b.blockIndex()
-	b.buf.Write(index)
+	b.buf = append(b.buf, u32SliceToBytes(b.blockEndOffsets)...)
+	b.buf = append(b.buf, b.baseKeysBuf...)
+	b.buf = append(b.buf, u32SliceToBytes(b.baseKeysEndOffs)...)
+	b.buf = append(b.buf, u32ToBytes(uint32(len(b.baseKeysEndOffs)))...)
 
 	// Write bloom filter.
-	bdata := bf.BinaryMarshal()
-	n, err := b.buf.Write(bdata)
-	y.Check(err)
-	var buf [4]byte
-	binary.BigEndian.PutUint32(buf[:], uint32(n))
-	b.buf.Write(buf[:])
+	bfData := b.bloomFilter.BinaryMarshal()
+	b.buf = append(b.buf, bfData...)
+	b.buf = append(b.buf, u32ToBytes(uint32(len(bfData)))...)
+	return b.buf
+}
 
-	return b.buf.Bytes()
+func u32ToBytes(v uint32) []byte {
+	var uBuf [4]byte
+	binary.LittleEndian.PutUint32(uBuf[:], v)
+	return uBuf[:]
+}
+
+func u32SliceToBytes(u32s []uint32) []byte {
+	var b []byte
+	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+	hdr.Len = len(u32s) * 4
+	hdr.Cap = hdr.Len
+	hdr.Data = uintptr(unsafe.Pointer(&u32s[0]))
+	return b
+}
+
+func bytesToU32Slice(b []byte) []uint32 {
+	var u32s []uint32
+	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&u32s))
+	hdr.Len = len(b) / 4
+	hdr.Cap = hdr.Len
+	hdr.Data = uintptr(unsafe.Pointer(&b[0]))
+	return u32s
+}
+
+func bytesToU32(b []byte) uint32 {
+	return binary.LittleEndian.Uint32(b)
 }

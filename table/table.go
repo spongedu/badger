@@ -17,7 +17,6 @@
 package table
 
 import (
-	"encoding/binary"
 	"fmt"
 	"os"
 	"path"
@@ -35,12 +34,6 @@ import (
 
 const fileSuffix = ".sst"
 
-type keyOffset struct {
-	key    []byte
-	offset int
-	len    int
-}
-
 // Table represents a loaded table file with the info we have about it
 type Table struct {
 	sync.Mutex
@@ -48,8 +41,11 @@ type Table struct {
 	fd        *os.File // Own fd.
 	tableSize int      // Initialized in OpenTable, using fd.Stat().
 
-	blockIndex []keyOffset
-	ref        int32 // For file garbage collection.  Atomic.
+	blockEndOffsets []uint32
+	baseKeys        []byte
+	baseKeysEndOffs []uint32
+
+	ref int32 // For file garbage collection.  Atomic.
 
 	loadingMode options.FileLoadingMode
 	mmap        []byte // Memory mapped.
@@ -139,9 +135,7 @@ func OpenTable(fd *os.File, loadingMode options.FileLoadingMode) (*Table, error)
 		}
 	}
 
-	if err := t.readIndex(); err != nil {
-		return nil, y.Wrap(err)
-	}
+	t.readIndex()
 
 	it := t.NewIterator(false)
 	defer it.Close()
@@ -189,111 +183,49 @@ func (t *Table) readNoFail(off int, sz int) []byte {
 	return res
 }
 
-func (t *Table) readIndex() error {
+func (t *Table) readIndex() {
 	readPos := t.tableSize
 
 	// Read bloom filter.
 	readPos -= 4
 	buf := t.readNoFail(readPos, 4)
-	bloomLen := int(binary.BigEndian.Uint32(buf))
+	bloomLen := int(bytesToU32(buf))
 	readPos -= bloomLen
 	data := t.readNoFail(readPos, bloomLen)
 	t.bf.BinaryUnmarshal(data)
 
 	readPos -= 4
 	buf = t.readNoFail(readPos, 4)
-	restartsLen := int(binary.BigEndian.Uint32(buf))
+	numBlocks := int(bytesToU32(buf))
 
-	readPos -= 4 * restartsLen
-	buf = t.readNoFail(readPos, 4*restartsLen)
+	readPos -= 4 * numBlocks
+	buf = t.readNoFail(readPos, 4*numBlocks)
+	t.baseKeysEndOffs = bytesToU32Slice(buf)
 
-	offsets := make([]int, restartsLen)
-	for i := 0; i < restartsLen; i++ {
-		offsets[i] = int(binary.BigEndian.Uint32(buf[:4]))
-		buf = buf[4:]
-	}
+	baseKeyBufLen := int(t.baseKeysEndOffs[numBlocks-1])
+	readPos -= baseKeyBufLen
+	t.baseKeys = t.readNoFail(readPos, baseKeyBufLen)
 
-	// The last offset stores the end of the last block.
-	for i := 0; i < len(offsets); i++ {
-		var o int
-		if i == 0 {
-			o = 0
-		} else {
-			o = offsets[i-1]
-		}
-
-		ko := keyOffset{
-			offset: o,
-			len:    offsets[i] - o,
-		}
-		t.blockIndex = append(t.blockIndex, ko)
-	}
-
-	che := make(chan error, len(t.blockIndex))
-	blocks := make(chan int, len(t.blockIndex))
-
-	for i := 0; i < len(t.blockIndex); i++ {
-		blocks <- i
-	}
-
-	for i := 0; i < 64; i++ { // Run 64 goroutines.
-		go func() {
-			var h header
-
-			for index := range blocks {
-				ko := &t.blockIndex[index]
-
-				offset := ko.offset
-				buf, err := t.read(offset, h.Size())
-				if err != nil {
-					che <- errors.Wrap(err, "While reading first header in block")
-					continue
-				}
-
-				h.Decode(buf)
-				y.AssertTruef(h.plen == 0, "Key offset: %+v, h.plen = %d", *ko, h.plen)
-
-				offset += h.Size()
-				buf = make([]byte, h.klen)
-				var out []byte
-				if out, err = t.read(offset, int(h.klen)); err != nil {
-					che <- errors.Wrap(err, "While reading first key in block")
-					continue
-				}
-				y.AssertTrue(len(buf) == copy(buf, out))
-
-				ko.key = buf
-				che <- nil
-			}
-		}()
-	}
-	close(blocks) // to stop reading goroutines
-
-	var readError error
-	for i := 0; i < len(t.blockIndex); i++ {
-		if err := <-che; err != nil && readError == nil {
-			readError = err
-		}
-	}
-	if readError != nil {
-		return readError
-	}
-
-	return nil
+	readPos -= 4 * numBlocks
+	buf = t.readNoFail(readPos, 4*numBlocks)
+	t.blockEndOffsets = bytesToU32Slice(buf)
 }
 
 func (t *Table) block(idx int) (block, error) {
-	y.AssertTruef(idx >= 0, "idx=%d", idx)
-	if idx >= len(t.blockIndex) {
+	y.AssertTrue(idx >= 0)
+	if idx >= len(t.blockEndOffsets) {
 		return block{}, errors.New("block out of index")
 	}
-
-	ko := t.blockIndex[idx]
+	var startOffset int
+	if idx > 0 {
+		startOffset = int(t.blockEndOffsets[idx-1])
+	}
+	endOffset := int(t.blockEndOffsets[idx])
 	blk := block{
-		offset: ko.offset,
+		offset: startOffset,
 	}
 	var err error
-	blk.data, err = t.read(blk.offset, ko.len)
+	blk.data, err = t.read(startOffset, endOffset-startOffset)
 	return blk, err
 }
 
