@@ -188,6 +188,9 @@ func u32ToBytes(v uint32) []byte {
 }
 
 func u32SliceToBytes(u32s []uint32) []byte {
+	if len(u32s) == 0 {
+		return nil
+	}
 	var b []byte
 	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&b))
 	hdr.Len = len(u32s) * 4
@@ -197,6 +200,9 @@ func u32SliceToBytes(u32s []uint32) []byte {
 }
 
 func bytesToU32Slice(b []byte) []uint32 {
+	if len(b) == 0 {
+		return nil
+	}
 	var u32s []uint32
 	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&u32s))
 	hdr.Len = len(b) / 4
