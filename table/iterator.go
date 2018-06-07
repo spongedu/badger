@@ -89,12 +89,12 @@ func (itr *blockIterator) seekToLast() {
 
 // setIdx sets the iterator to the entry index and set the current key and value.
 func (itr *blockIterator) setIdx(i int) {
+	itr.idx = i
 	if i >= len(itr.entryEndOffsets) || i < 0 {
 		itr.err = io.EOF
 		return
 	}
 	itr.err = nil
-	itr.idx = i
 	var startOffset int
 	if i > 0 {
 		startOffset = int(itr.entryEndOffsets[i-1])
