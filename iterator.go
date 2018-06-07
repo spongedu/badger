@@ -22,7 +22,6 @@ import (
 	"sync"
 
 	"github.com/coocood/badger/y"
-	farm "github.com/dgryski/go-farm"
 )
 
 type prefetchStatus uint8
@@ -302,11 +301,6 @@ func (it *Iterator) newItem() *Item {
 // Item returns pointer to the current key-value pair.
 // This item is only valid until it.Next() gets called.
 func (it *Iterator) Item() *Item {
-	tx := it.txn
-	if tx.update {
-		// Track reads if this is an update txn.
-		tx.reads = append(tx.reads, farm.Fingerprint64(it.item.Key()))
-	}
 	return it.item
 }
 
