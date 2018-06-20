@@ -17,6 +17,7 @@
 package y
 
 import (
+	"fmt"
 	"sort"
 	"testing"
 
@@ -156,12 +157,12 @@ func TestMergeSingleReversed(t *testing.T) {
 }
 
 func TestMergeMore(t *testing.T) {
-	it := newSimpleIterator([]string{"1", "3", "7"}, []string{"a1", "a3", "a7"}, false)
+	it1 := newSimpleIterator([]string{"1", "3", "7"}, []string{"a1", "a3", "a7"}, false)
 	it2 := newSimpleIterator([]string{"2", "3", "5"}, []string{"b2", "b3", "b5"}, false)
 	it3 := newSimpleIterator([]string{"1"}, []string{"c1"}, false)
 	it4 := newSimpleIterator([]string{"1", "7", "9"}, []string{"d1", "d7", "d9"}, false)
 
-	mergeIt := NewMergeIterator([]Iterator{it, it2, it3, it4}, false)
+	mergeIt := NewMergeIterator([]Iterator{it1, it2, it3, it4}, false)
 	expectedKeys := []string{"1", "2", "3", "5", "7", "9"}
 	expectedVals := []string{"a1", "b2", "a3", "b5", "a7", "d9"}
 	mergeIt.Rewind()
@@ -231,4 +232,27 @@ func TestMergeIteratorSeekInvalidReversed(t *testing.T) {
 	mergeIt.Seek([]byte("0"))
 	require.False(t, mergeIt.Valid())
 	closeAndCheck(t, mergeIt, 4)
+}
+
+func BenchmarkMergeIterator(b *testing.B) {
+	num := 2
+	simpleIters := make([]Iterator, num)
+	for i := 0; i < num; i++ {
+		simpleIters[i] = new(SimpleIterator)
+	}
+	for i := 0; i < num*100; i += num {
+		for j := 0; j < num; j++ {
+			iter := simpleIters[j].(*SimpleIterator)
+			iter.keys = append(iter.keys, []byte(fmt.Sprintf("key%08d", i+j)))
+		}
+	}
+	mergeIter := NewMergeIterator(simpleIters, false)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mergeIter.Rewind()
+		for mergeIter.Valid() {
+			mergeIter.Key()
+			mergeIter.Next()
+		}
+	}
 }
