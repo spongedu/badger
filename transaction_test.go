@@ -156,6 +156,7 @@ func TestTxnVersions(t *testing.T) {
 		}
 
 		checkIterator := func(itr *Iterator, i int) {
+			defer itr.Close()
 			count := 0
 			for itr.Rewind(); itr.Valid(); itr.Next() {
 				item := itr.Item()
@@ -225,12 +226,14 @@ func TestTxnVersions(t *testing.T) {
 			opt.AllVersions = true
 			itr = txn.NewIterator(opt)
 			checkAllVersions(itr, i)
+			itr.Close()
 
 			opt = DefaultIteratorOptions
 			opt.AllVersions = true
 			opt.Reverse = true
 			itr = txn.NewIterator(opt)
 			checkAllVersions(itr, i)
+			itr.Close()
 
 			txn.Discard()
 		}
@@ -290,6 +293,7 @@ func TestTxnIterationEdgeCase(t *testing.T) {
 		require.Equal(t, uint64(4), db.orc.readTs())
 
 		checkIterator := func(itr *Iterator, expected []string) {
+			defer itr.Close()
 			var i int
 			for itr.Rewind(); itr.Valid(); itr.Next() {
 				item := itr.Item()
@@ -373,6 +377,7 @@ func TestTxnIterationEdgeCase2(t *testing.T) {
 		require.Equal(t, uint64(4), db.orc.readTs())
 
 		checkIterator := func(itr *Iterator, expected []string) {
+			defer itr.Close()
 			var i int
 			for itr.Rewind(); itr.Valid(); itr.Next() {
 				item := itr.Item()
@@ -401,6 +406,7 @@ func TestTxnIterationEdgeCase2(t *testing.T) {
 		itr.Seek(kc)
 		require.True(t, itr.Valid())
 		require.Equal(t, itr.item.Key(), kc)
+		itr.Close()
 
 		itr = txn.NewIterator(rev)
 		itr.Seek(ka)
@@ -409,6 +415,7 @@ func TestTxnIterationEdgeCase2(t *testing.T) {
 		itr.Seek(kc)
 		require.True(t, itr.Valid())
 		require.Equal(t, itr.item.Key(), kc)
+		itr.Close()
 
 		txn.readTs = 3
 		itr = txn.NewIterator(DefaultIteratorOptions)
@@ -475,6 +482,7 @@ func TestTxnIterationEdgeCase3(t *testing.T) {
 		itr.Seek([]byte("ac"))
 		require.True(t, itr.Valid())
 		require.Equal(t, itr.item.Key(), kc)
+		itr.Close()
 
 		//  Keys: "abc", "ade"
 		// Read pending writes.
@@ -496,6 +504,7 @@ func TestTxnIterationEdgeCase3(t *testing.T) {
 		itr.Seek([]byte("ad"))
 		require.True(t, itr.Valid())
 		require.Equal(t, itr.item.Key(), kd)
+		itr.Close()
 
 		itr = txn.NewIterator(rev)
 		itr.Seek([]byte("ac"))
@@ -514,6 +523,7 @@ func TestTxnIterationEdgeCase3(t *testing.T) {
 		itr.Seek([]byte("ad"))
 		require.True(t, itr.Valid())
 		require.Equal(t, itr.item.Key(), kc)
+		itr.Close()
 
 		//  Keys: "abc", "ade"
 		itr = txn2.NewIterator(rev)
@@ -533,6 +543,7 @@ func TestTxnIterationEdgeCase3(t *testing.T) {
 		itr.Seek([]byte("ac"))
 		require.True(t, itr.Valid())
 		require.Equal(t, itr.item.Key(), kb)
+		itr.Close()
 	})
 }
 
@@ -568,6 +579,7 @@ func TestIteratorAllVersionsWithDeleted(t *testing.T) {
 		// Verify that deleted shows up when AllVersions is set.
 		err = db.View(func(txn *Txn) error {
 			it := txn.NewIterator(opts)
+			defer it.Close()
 			var count int
 			for it.Rewind(); it.Valid(); it.Next() {
 				count++
@@ -608,6 +620,7 @@ func TestIteratorAllVersionsWithDeleted2(t *testing.T) {
 		// Verify that deleted shows up when AllVersions is set.
 		err := db.View(func(txn *Txn) error {
 			it := txn.NewIterator(opts)
+			defer it.Close()
 			var count int
 			for it.Rewind(); it.Valid(); it.Next() {
 				item := it.Item()

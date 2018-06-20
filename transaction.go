@@ -124,8 +124,9 @@ type Txn struct {
 	db        *DB
 	discarded bool
 
-	size  int64
-	count int64
+	size         int64
+	count        int64
+	numIterators int32
 }
 
 type pendingWritesIterator struct {
@@ -339,6 +340,9 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 func (txn *Txn) Discard() {
 	if txn.discarded { // Avoid a re-run.
 		return
+	}
+	if atomic.LoadInt32(&txn.numIterators) > 0 {
+		panic("Unclosed iterator at time of Txn.Discard.")
 	}
 	txn.discarded = true
 	txn.db.orc.readMark.Done(txn.readTs)
