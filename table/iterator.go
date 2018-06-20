@@ -70,7 +70,7 @@ func (itr *blockIterator) seek(key []byte) {
 	itr.err = nil
 	foundEntryIdx := sort.Search(len(itr.entryEndOffsets), func(idx int) bool {
 		itr.setIdx(idx)
-		return y.CompareKeys(itr.Key(), key) >= 0
+		return y.CompareKeys(itr.key, key) >= 0
 	})
 	itr.setIdx(foundEntryIdx)
 }
@@ -122,26 +122,13 @@ func (itr *blockIterator) prev() {
 	itr.setIdx(itr.idx - 1)
 }
 
-func (itr *blockIterator) Key() []byte {
-	if itr.err != nil {
-		return nil
-	}
-	return itr.key
-}
-
-func (itr *blockIterator) Value() []byte {
-	if itr.err != nil {
-		return nil
-	}
-	return itr.val
-}
-
 // Iterator is an iterator for a Table.
 type Iterator struct {
 	t    *Table
 	bpos int
 	bi   blockIterator
 	err  error
+	buf  []byte
 
 	// Internally, Iterator is bidirectional. However, we only expose the
 	// unidirectional functionality for now.
@@ -330,12 +317,15 @@ func (itr *Iterator) prev() {
 
 // Key follows the y.Iterator interface
 func (itr *Iterator) Key() []byte {
-	return itr.bi.Key()
+	return itr.bi.key
 }
 
 // Value follows the y.Iterator interface
 func (itr *Iterator) Value() (ret y.ValueStruct) {
-	ret.Decode(itr.bi.Value())
+	// The bi.val is a reference to the mmap address, the returned value may be used after iterator close.
+	// So we need to make a copy here.
+	itr.buf = append(itr.buf[:0], itr.bi.val...)
+	ret.Decode(itr.buf)
 	return
 }
 
