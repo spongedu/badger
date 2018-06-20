@@ -17,9 +17,6 @@
 package y
 
 import (
-	"bytes"
-	"container/heap"
-
 	"github.com/pkg/errors"
 )
 
@@ -75,166 +72,95 @@ type Iterator interface {
 	Close() error
 }
 
-type elem struct {
-	itr      Iterator
-	nice     int
-	reversed bool
-}
-
-type elemHeap []*elem
-
-func (eh elemHeap) Len() int            { return len(eh) }
-func (eh elemHeap) Swap(i, j int)       { eh[i], eh[j] = eh[j], eh[i] }
-func (eh *elemHeap) Push(x interface{}) { *eh = append(*eh, x.(*elem)) }
-func (eh *elemHeap) Pop() interface{} {
-	// Remove the last element, because Go has already swapped 0th elem <-> last.
-	old := *eh
-	n := len(old)
-	x := old[n-1]
-	*eh = old[0 : n-1]
-	return x
-}
-func (eh elemHeap) Less(i, j int) bool {
-	cmp := CompareKeys(eh[i].itr.Key(), eh[j].itr.Key())
-	if cmp < 0 {
-		return !eh[i].reversed
-	}
-	if cmp > 0 {
-		return eh[i].reversed
-	}
-	// The keys are equal. In this case, lower nice take precedence. This is important.
-	return eh[i].nice < eh[j].nice
-}
-
-// MergeIterator merges multiple iterators.
-// NOTE: MergeIterator owns the array of iterators and is responsible for closing them.
+// MergeTowIterator is a specialized MergeIterator that only merge tow iterators.
+// It is an optimization for compaction.
 type MergeIterator struct {
-	h        elemHeap
-	curKey   []byte
-	reversed bool
-
-	all []Iterator
+	second  Iterator
+	smaller Iterator
+	bigger  Iterator
+	reverse bool
 }
 
-// NewMergeIterator returns a new MergeIterator from a list of Iterators.
-func NewMergeIterator(iters []Iterator, reversed bool) *MergeIterator {
-	m := &MergeIterator{all: iters, reversed: reversed}
-	m.h = make(elemHeap, 0, len(iters))
-	m.initHeap()
-	return m
-}
-
-func (s *MergeIterator) storeKey(smallest Iterator) {
-	if cap(s.curKey) < len(smallest.Key()) {
-		s.curKey = make([]byte, 2*len(smallest.Key()))
+func (mt *MergeIterator) fix() {
+	if !mt.bigger.Valid() {
+		return
 	}
-	s.curKey = s.curKey[:len(smallest.Key())]
-	copy(s.curKey, smallest.Key())
-}
-
-// initHeap checks all iterators and initializes our heap and array of keys.
-// Whenever we reverse direction, we need to run this.
-func (s *MergeIterator) initHeap() {
-	s.h = s.h[:0]
-	for idx, itr := range s.all {
-		if !itr.Valid() {
+	var cmp int
+	for mt.smaller.Valid() {
+		cmp = CompareKeys(mt.smaller.Key(), mt.bigger.Key())
+		if cmp == 0 {
+			mt.second.Next()
+			if !mt.second.Valid() {
+				return
+			}
 			continue
 		}
-		e := &elem{itr: itr, nice: idx, reversed: s.reversed}
-		s.h = append(s.h, e)
-	}
-	heap.Init(&s.h)
-	for len(s.h) > 0 {
-		it := s.h[0].itr
-		if it == nil || !it.Valid() {
-			heap.Pop(&s.h)
-			continue
+		if mt.reverse {
+			if cmp < 0 {
+				mt.smaller, mt.bigger = mt.bigger, mt.smaller
+			}
+		} else {
+			if cmp > 0 {
+				mt.smaller, mt.bigger = mt.bigger, mt.smaller
+			}
 		}
-		s.storeKey(s.h[0].itr)
-		break
+		return
 	}
-}
-
-// Valid returns whether the MergeIterator is at a valid element.
-func (s *MergeIterator) Valid() bool {
-	if s == nil {
-		return false
-	}
-	if len(s.h) == 0 {
-		return false
-	}
-	return s.h[0].itr.Valid()
-}
-
-// Key returns the key associated with the current iterator
-func (s *MergeIterator) Key() []byte {
-	if len(s.h) == 0 {
-		return nil
-	}
-	return s.h[0].itr.Key()
-}
-
-// Value returns the value associated with the iterator.
-func (s *MergeIterator) Value() ValueStruct {
-	if len(s.h) == 0 {
-		return ValueStruct{}
-	}
-	return s.h[0].itr.Value()
+	mt.smaller, mt.bigger = mt.bigger, mt.smaller
 }
 
 // Next returns the next element. If it is the same as the current key, ignore it.
-func (s *MergeIterator) Next() {
-	if len(s.h) == 0 {
-		return
-	}
-
-	smallest := s.h[0].itr
-	smallest.Next()
-
-	for len(s.h) > 0 {
-		smallest = s.h[0].itr
-		if !smallest.Valid() {
-			heap.Pop(&s.h)
-			continue
-		}
-
-		heap.Fix(&s.h, 0)
-		smallest = s.h[0].itr
-		if smallest.Valid() {
-			if !bytes.Equal(smallest.Key(), s.curKey) {
-				break
-			}
-			smallest.Next()
-		}
-	}
-	if !smallest.Valid() {
-		return
-	}
-	s.storeKey(smallest)
+func (mt *MergeIterator) Next() {
+	mt.smaller.Next()
+	mt.fix()
 }
 
 // Rewind seeks to first element (or last element for reverse iterator).
-func (s *MergeIterator) Rewind() {
-	for _, itr := range s.all {
-		itr.Rewind()
-	}
-	s.initHeap()
+func (mt *MergeIterator) Rewind() {
+	mt.smaller.Rewind()
+	mt.bigger.Rewind()
+	mt.fix()
 }
 
 // Seek brings us to element with key >= given key.
-func (s *MergeIterator) Seek(key []byte) {
-	for _, itr := range s.all {
-		itr.Seek(key)
-	}
-	s.initHeap()
+func (mt *MergeIterator) Seek(key []byte) {
+	mt.smaller.Seek(key)
+	mt.bigger.Seek(key)
+	mt.fix()
+}
+
+// Valid returns whether the MergeIterator is at a valid element.
+func (mt *MergeIterator) Valid() bool {
+	return mt.smaller.Valid()
+}
+
+// Key returns the key associated with the current iterator
+func (mt *MergeIterator) Key() []byte {
+	return mt.smaller.Key()
+}
+
+// Value returns the value associated with the iterator.
+func (mt *MergeIterator) Value() ValueStruct {
+	return mt.smaller.Value()
 }
 
 // Close implements y.Iterator
-func (s *MergeIterator) Close() error {
-	for _, itr := range s.all {
-		if err := itr.Close(); err != nil {
-			return errors.Wrap(err, "MergeIterator")
-		}
+func (mt *MergeIterator) Close() error {
+	err1 := mt.smaller.Close()
+	err2 := mt.bigger.Close()
+	if err1 != nil {
+		return errors.Wrap(err1, "MergeIterator")
 	}
-	return nil
+	return errors.Wrap(err2, "MergeIterator")
+}
+
+// NewMergeIterator creates a merge iterator
+func NewMergeIterator(iters []Iterator, reverse bool) Iterator {
+	if len(iters) == 1 {
+		return iters[0]
+	} else if len(iters) == 2 {
+		return &MergeIterator{smaller: iters[0], bigger: iters[1], second: iters[1], reverse: reverse}
+	}
+	mid := len(iters) / 2
+	return NewMergeIterator([]Iterator{NewMergeIterator(iters[:mid], reverse), NewMergeIterator(iters[mid:], reverse)}, reverse)
 }
