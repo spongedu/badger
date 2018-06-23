@@ -128,7 +128,6 @@ type Iterator struct {
 	bpos int
 	bi   blockIterator
 	err  error
-	buf  []byte
 
 	// Internally, Iterator is bidirectional. However, we only expose the
 	// unidirectional functionality for now.
@@ -322,10 +321,7 @@ func (itr *Iterator) Key() []byte {
 
 // Value follows the y.Iterator interface
 func (itr *Iterator) Value() (ret y.ValueStruct) {
-	// The bi.val is a reference to the mmap address, the returned value may be used after iterator close.
-	// So we need to make a copy here.
-	itr.buf = append(itr.buf[:0], itr.bi.val...)
-	ret.Decode(itr.buf)
+	ret.Decode(itr.bi.val)
 	return
 }
 

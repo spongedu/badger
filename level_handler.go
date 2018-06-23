@@ -261,6 +261,7 @@ func (s *levelHandler) get(key []byte) (y.ValueStruct, error) {
 			}
 		}
 	}
+	maxVs.Value = y.SafeCopy(nil, maxVs.Value)
 	return maxVs, decr()
 }
 
