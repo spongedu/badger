@@ -24,17 +24,15 @@ import (
 	"sort"
 	"time"
 
-	"golang.org/x/net/trace"
-
 	"github.com/coocood/badger/protos"
 	"github.com/coocood/badger/table"
 	"github.com/coocood/badger/y"
+	"github.com/ngaut/log"
 	"github.com/pkg/errors"
 )
 
 type levelsController struct {
 	nextFileID uint64 // Atomic
-	elog       trace.EventLog
 
 	// The following are initialized once and const.
 	levels []*levelHandler
@@ -62,7 +60,7 @@ func revertToManifest(kv *DB, mf *Manifest, idMap map[uint64]struct{}) error {
 	// 2. Delete files that shouldn't exist.
 	for id := range idMap {
 		if _, ok := mf.Tables[id]; !ok {
-			kv.elog.Printf("Table file %d not referenced in MANIFEST\n", id)
+			log.Infof("Table file %d not referenced in MANIFEST\n", id)
 			filename := table.NewFilename(id, kv.opt.Dir)
 			if err := os.Remove(filename); err != nil {
 				return y.Wrapf(err, "While removing table %d", id)
@@ -77,7 +75,6 @@ func newLevelsController(kv *DB, mf *Manifest) (*levelsController, error) {
 	y.AssertTrue(kv.opt.NumLevelZeroTablesStall > kv.opt.NumLevelZeroTables)
 	s := &levelsController{
 		kv:     kv,
-		elog:   kv.elog,
 		levels: make([]*levelHandler, kv.opt.MaxLevels),
 	}
 	s.cstatus.levels = make([]*levelCompactStatus, kv.opt.MaxLevels)
@@ -278,7 +275,7 @@ func (s *levelsController) compactBuildTables(
 				break
 			}
 		}
-		cd.elog.LazyPrintf("Key range overlaps with lower levels: %v", hasOverlap)
+		log.Infof("Key range overlaps with lower levels: %v", hasOverlap)
 	}
 
 	// Try to collect stats so that we can inform value log about GC. That would help us find which
@@ -383,8 +380,8 @@ func (s *levelsController) compactBuildTables(
 		}
 		// It was true that it.Valid() at least once in the loop above, which means we
 		// called Add() at least once, and builder is not Empty().
-		cd.elog.LazyPrintf("Added %d keys. Skipped %d keys.", numKeys, numSkips)
-		cd.elog.LazyPrintf("LOG Compact. Iteration took: %v\n", time.Since(timeStart))
+		log.Infof("Added %d keys. Skipped %d keys.", numKeys, numSkips)
+		log.Infof("LOG Compact. Iteration took: %v\n", time.Since(timeStart))
 		if !builder.Empty() {
 			numBuilds++
 			fileID := s.reserveFileID()
@@ -443,7 +440,7 @@ func (s *levelsController) compactBuildTables(
 		return y.CompareKeys(newTables[i].Biggest(), newTables[j].Biggest()) < 0
 	})
 	s.kv.vlog.updateGCStats(discardStats)
-	cd.elog.LazyPrintf("Discard stats: %v", discardStats)
+	log.Infof("Discard stats: %v", discardStats)
 	return newTables, func() error { return decrRefs(newTables) }, nil
 }
 
@@ -462,8 +459,6 @@ func buildChangeSet(cd *compactDef, newTables []*table.Table) protos.ManifestCha
 }
 
 type compactDef struct {
-	elog trace.Trace
-
 	thisLevel *levelHandler
 	nextLevel *levelHandler
 
@@ -608,7 +603,7 @@ func (s *levelsController) runCompactDef(l int, cd compactDef) (err error) {
 	// Note: For level 0, while doCompact is running, it is possible that new tables are added.
 	// However, the tables are added only to the end, so it is ok to just delete the first table.
 
-	cd.elog.LazyPrintf("LOG Compact %d->%d, del %d tables, add %d tables, took %v\n",
+	log.Infof("LOG Compact %d->%d, del %d tables, add %d tables, took %v\n",
 		l, l+1, len(cd.top)+len(cd.bot), len(newTables), time.Since(timeStart))
 	return nil
 }
@@ -619,41 +614,36 @@ func (s *levelsController) doCompact(p compactionPriority) (bool, error) {
 	y.AssertTrue(l+1 < s.kv.opt.MaxLevels) // Sanity check.
 
 	cd := compactDef{
-		elog:      trace.New(fmt.Sprintf("Badger.L%d", l), "Compact"),
 		thisLevel: s.levels[l],
 		nextLevel: s.levels[l+1],
 	}
-	cd.elog.SetMaxEvents(100)
-	defer cd.elog.Finish()
 
-	cd.elog.LazyPrintf("Got compaction priority: %+v", p)
+	log.Infof("Got compaction priority: %+v", p)
 
 	// While picking tables to be compacted, both levels' tables are expected to
 	// remain unchanged.
 	if l == 0 {
 		if !s.fillTablesL0(&cd) {
-			cd.elog.LazyPrintf("fillTables failed for level: %d\n", l)
+			log.Infof("fillTables failed for level: %d\n", l)
 			return false, nil
 		}
 
 	} else {
 		if !s.fillTables(&cd) {
-			cd.elog.LazyPrintf("fillTables failed for level: %d\n", l)
+			log.Infof("fillTables failed for level: %d\n", l)
 			return false, nil
 		}
 	}
 	defer s.cstatus.delete(cd) // Remove the ranges from compaction status.
 
-	cd.elog.LazyPrintf("Running for level: %d\n", cd.thisLevel.level)
-	s.cstatus.toLog(cd.elog)
+	log.Infof("Running for level: %d\n", cd.thisLevel.level)
 	if err := s.runCompactDef(l, cd); err != nil {
 		// This compaction couldn't be done successfully.
-		cd.elog.LazyPrintf("\tLOG Compact FAILED with error: %+v: %+v", err, cd)
+		log.Infof("\tLOG Compact FAILED with error: %+v: %+v", err, cd)
 		return false, err
 	}
 
-	s.cstatus.toLog(cd.elog)
-	cd.elog.LazyPrintf("Compaction for level: %d DONE", cd.thisLevel.level)
+	log.Infof("Compaction for level: %d DONE", cd.thisLevel.level)
 	return true, nil
 }
 
@@ -673,11 +663,11 @@ func (s *levelsController) addLevel0Table(t *table.Table) error {
 		// Stall. Make sure all levels are healthy before we unstall.
 		var timeStart time.Time
 		{
-			s.elog.Printf("STALLED STALLED STALLED STALLED STALLED STALLED STALLED STALLED: %v\n",
+			log.Infof("STALLED STALLED STALLED STALLED STALLED STALLED STALLED STALLED: %v\n",
 				time.Since(lastUnstalled))
 			s.cstatus.RLock()
 			for i := 0; i < s.kv.opt.MaxLevels; i++ {
-				s.elog.Printf("level=%d. Status=%s Size=%d\n",
+				log.Infof("level=%d. Status=%s Size=%d\n",
 					i, s.cstatus.levels[i].debug(), s.levels[i].getTotalSize())
 			}
 			s.cstatus.RUnlock()
@@ -697,12 +687,12 @@ func (s *levelsController) addLevel0Table(t *table.Table) error {
 			time.Sleep(10 * time.Millisecond)
 			if i%100 == 0 {
 				prios := s.pickCompactLevels()
-				s.elog.Printf("Waiting to add level 0 table. Compaction priorities: %+v\n", prios)
+				log.Infof("Waiting to add level 0 table. Compaction priorities: %+v\n", prios)
 				i = 0
 			}
 		}
 		{
-			s.elog.Printf("UNSTALLED UNSTALLED UNSTALLED UNSTALLED UNSTALLED UNSTALLED: %v\n",
+			log.Infof("UNSTALLED UNSTALLED UNSTALLED UNSTALLED UNSTALLED UNSTALLED: %v\n",
 				time.Since(timeStart))
 			lastUnstalled = time.Now()
 		}
