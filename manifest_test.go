@@ -25,8 +25,6 @@ import (
 	"sort"
 	"testing"
 
-	"golang.org/x/net/trace"
-
 	"github.com/coocood/badger/options"
 	"github.com/coocood/badger/protos"
 	"github.com/coocood/badger/table"
@@ -179,7 +177,6 @@ func TestOverlappingKeyRangeError(t *testing.T) {
 	cd := compactDef{
 		thisLevel: lh0,
 		nextLevel: lh1,
-		elog:      trace.New("Badger", "Compact"),
 	}
 
 	manifest := createManifest()
@@ -199,7 +196,6 @@ func TestOverlappingKeyRangeError(t *testing.T) {
 	cd = compactDef{
 		thisLevel: lh0,
 		nextLevel: lh1,
-		elog:      trace.New("Badger", "Compact"),
 	}
 	lc.fillTablesL0(&cd)
 	lc.runCompactDef(0, cd)

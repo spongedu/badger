@@ -21,10 +21,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/ngaut/log"
 	"hash/crc32"
 	"io"
 	"io/ioutil"
-	"log"
 	"math"
 	"math/rand"
 	"os"
@@ -291,10 +291,10 @@ func (vlog *valueLog) iterate(lf *logFile, offset uint32, fn logEntry) error {
 	return nil
 }
 
-func (vlog *valueLog) rewrite(f *logFile, tr trace.Trace) error {
+func (vlog *valueLog) rewrite(f *logFile) error {
 	maxFid := atomic.LoadUint32(&vlog.maxFid)
 	y.AssertTruef(uint32(f.fid) < maxFid, "fid to move: %d. Current max fid: %d", f.fid, maxFid)
-	tr.LazyPrintf("Rewriting fid: %d", f.fid)
+	log.Infof("Rewriting fid: %d", f.fid)
 
 	wb := make([]*Entry, 0, 1000)
 	var size int64
@@ -304,7 +304,7 @@ func (vlog *valueLog) rewrite(f *logFile, tr trace.Trace) error {
 	fe := func(e Entry) error {
 		count++
 		if count%100000 == 0 {
-			tr.LazyPrintf("Processing entry %d", count)
+			log.Infof("Processing entry %d", count)
 		}
 
 		vs, err := vlog.kv.get(e.Key)
@@ -346,7 +346,7 @@ func (vlog *valueLog) rewrite(f *logFile, tr trace.Trace) error {
 			wb = append(wb, ne)
 			size += int64(e.estimateSize(vlog.opt.ValueThreshold))
 			if size >= 64*mi {
-				tr.LazyPrintf("request has %d entries, size %d", len(wb), size)
+				log.Infof("request has %d entries, size %d", len(wb), size)
 				if err := vlog.kv.batchSet(wb); err != nil {
 					return err
 				}
@@ -354,7 +354,7 @@ func (vlog *valueLog) rewrite(f *logFile, tr trace.Trace) error {
 				wb = wb[:0]
 			}
 		} else {
-			log.Printf("WARNING: This entry should have been caught. %+v\n", e)
+			log.Infof("WARNING: This entry should have been caught. %+v\n", e)
 		}
 		return nil
 	}
@@ -366,13 +366,13 @@ func (vlog *valueLog) rewrite(f *logFile, tr trace.Trace) error {
 		return err
 	}
 
-	tr.LazyPrintf("request has %d entries, size %d", len(wb), size)
+	log.Infof("request has %d entries, size %d", len(wb), size)
 	batchSize := 1024
 	var loops int
 	for i := 0; i < len(wb); {
 		loops++
 		if batchSize == 0 {
-			log.Printf("WARNING: We shouldn't reach batch size of zero.")
+			log.Infof("WARNING: We shouldn't reach batch size of zero.")
 			return ErrNoRewrite
 		}
 		end := i + batchSize
@@ -383,16 +383,16 @@ func (vlog *valueLog) rewrite(f *logFile, tr trace.Trace) error {
 			if err == ErrTxnTooBig {
 				// Decrease the batch size to half.
 				batchSize = batchSize / 2
-				tr.LazyPrintf("Dropped batch size to %d", batchSize)
+				log.Infof("Dropped batch size to %d", batchSize)
 				continue
 			}
 			return err
 		}
 		i += batchSize
 	}
-	tr.LazyPrintf("Processed %d entries in %d loops", len(wb), loops)
-	tr.LazyPrintf("Total entries: %d. Moved: %d", count, moved)
-	tr.LazyPrintf("Removing fid: %d", f.fid)
+	log.Infof("Processed %d entries in %d loops", len(wb), loops)
+	log.Infof("Total entries: %d. Moved: %d", count, moved)
+	log.Infof("Removing fid: %d", f.fid)
 	var deleteFileNow bool
 	// Entries written to LSM. Remove the older file now.
 	{
@@ -418,11 +418,11 @@ func (vlog *valueLog) rewrite(f *logFile, tr trace.Trace) error {
 	return nil
 }
 
-func (vlog *valueLog) deleteMoveKeysFor(fid uint32, tr trace.Trace) {
+func (vlog *valueLog) deleteMoveKeysFor(fid uint32) {
 	db := vlog.kv
 	var result []*Entry
 	var count, pointers uint64
-	tr.LazyPrintf("Iterating over move keys to find invalids for fid: %d", fid)
+	log.Infof("Iterating over move keys to find invalids for fid: %d", fid)
 	err := db.View(func(txn *Txn) error {
 		opt := DefaultIteratorOptions
 		opt.internalAccess = true
@@ -447,12 +447,11 @@ func (vlog *valueLog) deleteMoveKeysFor(fid uint32, tr trace.Trace) {
 		return nil
 	})
 	if err != nil {
-		tr.LazyPrintf("Got error while iterating move keys: %v", err)
-		tr.SetError()
+		log.Infof("Got error while iterating move keys: %v", err)
 		return
 	}
-	tr.LazyPrintf("Num total move keys: %d. Num pointers: %d", count, pointers)
-	tr.LazyPrintf("Number of invalid move keys found: %d", len(result))
+	log.Infof("Num total move keys: %d. Num pointers: %d", count, pointers)
+	log.Infof("Number of invalid move keys found: %d", len(result))
 	batchSize := 10240
 	for i := 0; i < len(result); {
 		end := i + batchSize
@@ -462,16 +461,15 @@ func (vlog *valueLog) deleteMoveKeysFor(fid uint32, tr trace.Trace) {
 		if err := db.batchSet(result[i:end]); err != nil {
 			if err == ErrTxnTooBig {
 				batchSize /= 2
-				tr.LazyPrintf("Dropped batch size to %d", batchSize)
+				log.Infof("Dropped batch size to %d", batchSize)
 				continue
 			}
-			tr.LazyPrintf("Error while doing batchSet: %v", err)
-			tr.SetError()
+			log.Infof("Error while doing batchSet: %v", err)
 			return
 		}
 		i += batchSize
 	}
-	tr.LazyPrintf("Move keys deletion done.")
+	log.Infof("Move keys deletion done.")
 	return
 }
 
@@ -907,10 +905,10 @@ func (vlog *valueLog) pickLog(head valuePointer, tr trace.Trace) (files []*logFi
 	defer vlog.filesLock.RUnlock()
 	fids := vlog.sortedFids()
 	if len(fids) <= 1 {
-		tr.LazyPrintf("Only one or less value log file.")
+		log.Infof("Only one or less value log file.")
 		return nil
 	} else if head.Fid == 0 {
-		tr.LazyPrintf("Head pointer is at zero.")
+		log.Infof("Head pointer is at zero.")
 		return nil
 	}
 
@@ -932,10 +930,10 @@ func (vlog *valueLog) pickLog(head valuePointer, tr trace.Trace) (files []*logFi
 	vlog.lfDiscardStats.Unlock()
 
 	if candidate.fid != math.MaxUint32 { // Found a candidate
-		tr.LazyPrintf("Found candidate via discard stats: %v", candidate)
+		log.Infof("Found candidate via discard stats: %v", candidate)
 		files = append(files, vlog.filesMap[candidate.fid])
 	} else {
-		tr.LazyPrintf("Could not find candidate via discard stats. Randomly picking one.")
+		log.Infof("Could not find candidate via discard stats. Randomly picking one.")
 	}
 
 	// Fallback to randomly picking a log file
@@ -947,14 +945,14 @@ func (vlog *valueLog) pickLog(head valuePointer, tr trace.Trace) (files []*logFi
 		}
 	}
 	if idxHead == 0 { // Not found or first file
-		tr.LazyPrintf("Could not find any file.")
+		log.Infof("Could not find any file.")
 		return nil
 	}
 	idx := rand.Intn(idxHead) // Don’t include head.Fid. We pick a random file before it.
 	if idx > 0 {
 		idx = rand.Intn(idx + 1) // Another level of rand to favor smaller fids.
 	}
-	tr.LazyPrintf("Randomly chose fid: %d", fids[idx])
+	log.Infof("Randomly chose fid: %d", fids[idx])
 	files = append(files, vlog.filesMap[fids[idx]])
 	return files
 }
@@ -978,7 +976,7 @@ func discardEntry(e Entry, vs y.ValueStruct) bool {
 	return false
 }
 
-func (vlog *valueLog) doRunGC(lf *logFile, discardRatio float64, tr trace.Trace) (err error) {
+func (vlog *valueLog) doRunGC(lf *logFile, discardRatio float64) (err error) {
 	// Update stats before exiting
 	defer func() {
 		if err == nil {
@@ -996,8 +994,7 @@ func (vlog *valueLog) doRunGC(lf *logFile, discardRatio float64, tr trace.Trace)
 
 	fi, err := lf.fd.Stat()
 	if err != nil {
-		tr.LazyPrintf("Error while finding file size: %v", err)
-		tr.SetError()
+		log.Infof("Error while finding file size: %v", err)
 		return err
 	}
 	window := float64(fi.Size()) * 0.1 // 10% of the file as window.
@@ -1006,7 +1003,7 @@ func (vlog *valueLog) doRunGC(lf *logFile, discardRatio float64, tr trace.Trace)
 	skipFirstM := float64(rand.Int63n(fi.Size())) // Pick a random starting location.
 	skipFirstM -= window                          // Avoid hitting EOF by moving back by window.
 	skipFirstM /= float64(mi)                     // Convert to MBs.
-	tr.LazyPrintf("Skip first %5.2f MB of file of size: %d MB", skipFirstM, fi.Size()/mi)
+	log.Infof("Skip first %5.2f MB of file of size: %d MB", skipFirstM, fi.Size()/mi)
 	var skipped float64
 
 	var r reason
@@ -1024,15 +1021,15 @@ func (vlog *valueLog) doRunGC(lf *logFile, discardRatio float64, tr trace.Trace)
 
 		// Sample until we reach window size or 10K entries or exceed 10 seconds.
 		if r.count > 10000 {
-			tr.LazyPrintf("Stopping sampling after 10K entries.")
+			log.Infof("Stopping sampling after 10K entries.")
 			return errStop
 		}
 		if r.total > window {
-			tr.LazyPrintf("Stopping sampling after reaching window size.")
+			log.Infof("Stopping sampling after reaching window size.")
 			return errStop
 		}
 		if time.Since(start) > 10*time.Second {
-			tr.LazyPrintf("Stopping sampling after 10 seconds.")
+			log.Infof("Stopping sampling after 10 seconds.")
 			return errStop
 		}
 		r.total += esz
@@ -1082,22 +1079,21 @@ func (vlog *valueLog) doRunGC(lf *logFile, discardRatio float64, tr trace.Trace)
 	})
 
 	if err != nil {
-		tr.LazyPrintf("Error while iterating for RunGC: %v", err)
-		tr.SetError()
+		log.Infof("Error while iterating for RunGC: %v", err)
 		return err
 	}
-	tr.LazyPrintf("Fid: %d. Skipped: %5.2fMB Num iterations: %d. Data status=%+v\n",
+	log.Infof("Fid: %d. Skipped: %5.2fMB Num iterations: %d. Data status=%+v\n",
 		lf.fid, skipped, numIterations, r)
 
 	// If we sampled at least 10MB, we can make a call about rewrite.
 	if (r.count < 10000 && r.total < 10.0) || r.discard < discardRatio*r.total {
-		tr.LazyPrintf("Skipping GC on fid: %d", lf.fid)
+		log.Infof("Skipping GC on fid: %d", lf.fid)
 		return ErrNoRewrite
 	}
-	if err = vlog.rewrite(lf, tr); err != nil {
+	if err = vlog.rewrite(lf); err != nil {
 		return err
 	}
-	tr.LazyPrintf("Done rewriting.")
+	log.Infof("Done rewriting.")
 	return nil
 }
 
@@ -1129,9 +1125,9 @@ func (vlog *valueLog) runGC(discardRatio float64, head valuePointer) error {
 				continue
 			}
 			tried[lf.fid] = true
-			err = vlog.doRunGC(lf, discardRatio, tr)
+			err = vlog.doRunGC(lf, discardRatio)
 			if err == nil {
-				vlog.deleteMoveKeysFor(lf.fid, tr)
+				vlog.deleteMoveKeysFor(lf.fid)
 				return nil
 			}
 		}
