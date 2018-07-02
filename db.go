@@ -575,7 +575,7 @@ func (db *DB) writeRequests(reqs []*request) error {
 		for err := db.ensureRoomForWrite(); err == errNoRoom; err = db.ensureRoomForWrite() {
 			i++
 			if i%100 == 0 {
-				log.Infof("Making room for writes")
+				log.Warnf("Making room for writes")
 			}
 			// We need to poll a bit because both hasRoomForWrite and the flusher need access to s.imm.
 			// When flushChan is full and you are blocked there, and the flusher is trying to update s.imm,
@@ -758,8 +758,20 @@ func writeLevel0Table(s *skl.Skiplist, f *os.File) error {
 			return err
 		}
 	}
-	_, err := f.Write(b.Finish())
-	return err
+	buf := b.Finish()
+	const step = 256 * 1024
+	up := step
+	for base := 0; base < len(buf); base += step {
+		up = base + step
+		if up >= len(buf) {
+			up = len(buf)
+		}
+		_, err := f.Write(buf[base:up])
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type flushTask struct {
