@@ -661,18 +661,15 @@ func (s *levelsController) addLevel0Table(t *table.Table) error {
 
 	for !s.levels[0].tryAddLevel0Table(t) {
 		// Stall. Make sure all levels are healthy before we unstall.
-		var timeStart time.Time
-		{
-			log.Infof("STALLED STALLED STALLED STALLED STALLED STALLED STALLED STALLED: %v\n",
-				time.Since(lastUnstalled))
-			s.cstatus.RLock()
-			for i := 0; i < s.kv.opt.MaxLevels; i++ {
-				log.Infof("level=%d. Status=%s Size=%d\n",
-					i, s.cstatus.levels[i].debug(), s.levels[i].getTotalSize())
-			}
-			s.cstatus.RUnlock()
-			timeStart = time.Now()
+		log.Warnf("STALLED STALLED STALLED STALLED STALLED STALLED STALLED STALLED: %v\n",
+			time.Since(lastUnstalled))
+		s.cstatus.RLock()
+		for i := 0; i < s.kv.opt.MaxLevels; i++ {
+			log.Infof("level=%d. Status=%s Size=%d\n",
+				i, s.cstatus.levels[i].debug(), s.levels[i].getTotalSize())
 		}
+		s.cstatus.RUnlock()
+		timeStart := time.Now()
 		// Before we unstall, we need to make sure that level 0 and 1 are healthy. Otherwise, we
 		// will very quickly fill up level 0 again and if the compaction strategy favors level 0,
 		// then level 1 is going to super full.
@@ -687,15 +684,13 @@ func (s *levelsController) addLevel0Table(t *table.Table) error {
 			time.Sleep(10 * time.Millisecond)
 			if i%100 == 0 {
 				prios := s.pickCompactLevels()
-				log.Infof("Waiting to add level 0 table. Compaction priorities: %+v\n", prios)
+				log.Warnf("Waiting to add level 0 table. Compaction priorities: %+v\n", prios)
 				i = 0
 			}
 		}
-		{
-			log.Infof("UNSTALLED UNSTALLED UNSTALLED UNSTALLED UNSTALLED UNSTALLED: %v\n",
-				time.Since(timeStart))
-			lastUnstalled = time.Now()
-		}
+		log.Infof("UNSTALLED UNSTALLED UNSTALLED UNSTALLED UNSTALLED UNSTALLED: %v\n",
+			time.Since(timeStart))
+		lastUnstalled = time.Now()
 	}
 
 	return nil
