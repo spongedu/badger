@@ -758,7 +758,10 @@ func writeLevel0Table(s *skl.Skiplist, f *os.File) error {
 			return err
 		}
 	}
-	buf := b.Finish()
+	return writeToFile(f, b.Finish())
+}
+
+func writeToFile(f *os.File, buf []byte) error {
 	const step = 256 * 1024
 	up := step
 	for base := 0; base < len(buf); base += step {
