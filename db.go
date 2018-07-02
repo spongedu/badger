@@ -557,7 +557,7 @@ func (db *DB) writeRequests(reqs []*request) error {
 		}
 	}
 
-	log.Infof("writeRequests called. Writing to value log")
+	log.Debugf("writeRequests called. Writing to value log")
 
 	err := db.vlog.write(reqs)
 	if err != nil {
@@ -565,7 +565,6 @@ func (db *DB) writeRequests(reqs []*request) error {
 		return err
 	}
 
-	log.Infof("Writing to memtable")
 	var count int
 	for _, b := range reqs {
 		if len(b.Entries) == 0 {
@@ -594,7 +593,7 @@ func (db *DB) writeRequests(reqs []*request) error {
 		db.updateOffset(b.Ptrs)
 	}
 	done(nil)
-	log.Infof("%d entries written", count)
+	log.Debugf("%d entries written", count)
 	return nil
 }
 
