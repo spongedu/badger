@@ -452,8 +452,9 @@ func (it *Iterator) fill(item *Item) {
 	item.meta = vs.Meta
 	item.userMeta = vs.UserMeta
 
-	item.version = y.ParseTs(it.iitr.Key())
-	item.key = y.SafeCopy(item.key, y.ParseKey(it.iitr.Key()))
+	key := it.iitr.Key()
+	item.version = y.ParseTs(key)
+	item.key = y.SafeCopy(item.key, y.ParseKey(key))
 
 	item.vptr = y.SafeCopy(item.vptr, vs.Value)
 	item.val = nil
