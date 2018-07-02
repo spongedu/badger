@@ -724,14 +724,13 @@ func (db *DB) ensureRoomForWrite() error {
 	y.AssertTrue(db.mt != nil) // A nil mt indicates that DB is being closed.
 	select {
 	case db.flushChan <- flushTask{db.mt, db.vptr}:
-		log.Infof("Flushing value log to disk if async mode.")
 		// Ensure value log is synced to disk so this memtable's contents wouldn't be lost.
 		err = db.vlog.sync()
 		if err != nil {
 			return err
 		}
 
-		log.Infof("Flushing memtable, mt.size=%d size of flushChan: %d\n",
+		log.Infof("Flushing memtable, mt.size=%d, size of flushChan: %d\n",
 			db.mt.MemSize(), len(db.flushChan))
 		// We manage to push this task. Let's modify imm.
 		db.imm = append(db.imm, db.mt)
