@@ -75,6 +75,13 @@ type Iterator interface {
 // MergeTowIterator is a specialized MergeIterator that only merge tow iterators.
 // It is an optimization for compaction.
 type MergeIterator struct {
+	smallerValid bool
+	biggerValid  bool
+	smallerKey   []byte
+	biggerKey    []byte
+	smallerVal   ValueStruct
+	biggerVal    ValueStruct
+
 	second  Iterator
 	smaller Iterator
 	bigger  Iterator
@@ -82,31 +89,47 @@ type MergeIterator struct {
 }
 
 func (mt *MergeIterator) fix() {
-	if !mt.bigger.Valid() {
+	mt.resetSmaller()
+	if !mt.biggerValid {
 		return
 	}
 	var cmp int
-	for mt.smaller.Valid() {
-		cmp = CompareKeys(mt.smaller.Key(), mt.bigger.Key())
+	for mt.smallerValid {
+		cmp = CompareKeys(mt.smallerKey, mt.biggerKey)
 		if cmp == 0 {
 			mt.second.Next()
-			if !mt.second.Valid() {
+			var secondValid bool
+			if mt.second == mt.smaller {
+				mt.resetSmaller()
+				secondValid = mt.smallerValid
+			} else {
+				mt.resetBigger()
+				secondValid = mt.biggerValid
+			}
+			if !secondValid {
 				return
 			}
 			continue
 		}
 		if mt.reverse {
 			if cmp < 0 {
-				mt.smaller, mt.bigger = mt.bigger, mt.smaller
+				mt.swap()
 			}
 		} else {
 			if cmp > 0 {
-				mt.smaller, mt.bigger = mt.bigger, mt.smaller
+				mt.swap()
 			}
 		}
 		return
 	}
+	mt.swap()
+}
+
+func (mt *MergeIterator) swap() {
 	mt.smaller, mt.bigger = mt.bigger, mt.smaller
+	mt.smallerKey, mt.biggerKey = mt.biggerKey, mt.smallerKey
+	mt.smallerValid, mt.biggerValid = mt.biggerValid, mt.smallerValid
+	mt.smallerVal, mt.biggerVal = mt.biggerVal, mt.smallerVal
 }
 
 // Next returns the next element. If it is the same as the current key, ignore it.
@@ -115,10 +138,27 @@ func (mt *MergeIterator) Next() {
 	mt.fix()
 }
 
+func (mt *MergeIterator) resetBigger() {
+	mt.biggerValid = mt.bigger.Valid()
+	if mt.biggerValid {
+		mt.biggerKey = mt.bigger.Key()
+		mt.biggerVal = mt.bigger.Value()
+	}
+}
+
+func (mt *MergeIterator) resetSmaller() {
+	mt.smallerValid = mt.smaller.Valid()
+	if mt.smallerValid {
+		mt.smallerKey = mt.smaller.Key()
+		mt.smallerVal = mt.smaller.Value()
+	}
+}
+
 // Rewind seeks to first element (or last element for reverse iterator).
 func (mt *MergeIterator) Rewind() {
 	mt.smaller.Rewind()
 	mt.bigger.Rewind()
+	mt.resetBigger()
 	mt.fix()
 }
 
@@ -126,22 +166,23 @@ func (mt *MergeIterator) Rewind() {
 func (mt *MergeIterator) Seek(key []byte) {
 	mt.smaller.Seek(key)
 	mt.bigger.Seek(key)
+	mt.resetBigger()
 	mt.fix()
 }
 
 // Valid returns whether the MergeIterator is at a valid element.
 func (mt *MergeIterator) Valid() bool {
-	return mt.smaller.Valid()
+	return mt.smallerValid
 }
 
 // Key returns the key associated with the current iterator
 func (mt *MergeIterator) Key() []byte {
-	return mt.smaller.Key()
+	return mt.smallerKey
 }
 
 // Value returns the value associated with the iterator.
 func (mt *MergeIterator) Value() ValueStruct {
-	return mt.smaller.Value()
+	return mt.smallerVal
 }
 
 // Close implements y.Iterator
