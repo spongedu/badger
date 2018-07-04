@@ -136,7 +136,6 @@ func ParseKey(key []byte) []byte {
 		return nil
 	}
 
-	AssertTrue(len(key) > 8)
 	return key[:len(key)-8]
 }
 
