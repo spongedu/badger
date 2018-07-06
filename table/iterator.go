@@ -331,6 +331,11 @@ func (itr *Iterator) Value() (ret y.ValueStruct) {
 	return
 }
 
+// FillValue fill the value struct.
+func (itr *Iterator) FillValue(vs *y.ValueStruct) {
+	vs.Decode(itr.bi.val)
+}
+
 // Next follows the y.Iterator interface
 func (itr *Iterator) Next() {
 	if !itr.reversed {
@@ -422,6 +427,10 @@ func (s *ConcatIterator) Key() []byte {
 // Value implements y.Interface
 func (s *ConcatIterator) Value() y.ValueStruct {
 	return s.cur.Value()
+}
+
+func (s *ConcatIterator) FillValue(vs *y.ValueStruct) {
+	s.cur.FillValue(vs)
 }
 
 // Seek brings us to element >= key if reversed is false. Otherwise, <= key.

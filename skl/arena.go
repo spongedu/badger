@@ -119,6 +119,10 @@ func (s *Arena) getVal(offset uint32, size uint16) (ret y.ValueStruct) {
 	return
 }
 
+func (s *Arena) fillVal(vs *y.ValueStruct, offset uint32, size uint16) {
+	vs.Decode(s.buf[offset : offset+uint32(size)])
+}
+
 // getNodeOffset returns the offset of node in the arena. If the node pointer is
 // nil, then the zero offset is returned.
 func (s *Arena) getNodeOffset(nd *node) uint32 {

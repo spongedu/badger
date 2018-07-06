@@ -75,6 +75,11 @@ func (s *SimpleIterator) Value() ValueStruct {
 		Meta:     0,
 	}
 }
+func (s *SimpleIterator) FillValue(vs *ValueStruct) {
+	vs.Value = s.vals[s.idx]
+	vs.UserMeta = 55
+	vs.Meta = 0
+}
 func (s *SimpleIterator) Valid() bool {
 	return s.idx >= 0 && s.idx < len(s.keys)
 }

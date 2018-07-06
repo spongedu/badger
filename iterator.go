@@ -260,6 +260,7 @@ type Iterator struct {
 
 	opt   IteratorOptions
 	item  *Item
+	vs    y.ValueStruct
 	data  list
 	waste list
 
@@ -281,6 +282,9 @@ func (txn *Txn) NewIterator(opt IteratorOptions) *Iterator {
 		iters = append(iters, itr)
 	}
 	for i := 0; i < len(tables); i++ {
+		if tables[i].Empty() {
+			continue
+		}
 		iters = append(iters, tables[i].NewUniIterator(opt.Reverse))
 	}
 	iters = txn.db.lc.appendIterators(iters, opt.Reverse) // This will increment references.
@@ -341,7 +345,9 @@ func (it *Iterator) Close() {
 // to ensure you have access to a valid it.Item().
 func (it *Iterator) Next() {
 	// Reuse current item
-	it.item.wg.Wait() // Just cleaner to wait before pushing to avoid doing ref counting.
+	if it.opt.PrefetchValues {
+		it.item.wg.Wait() // Just cleaner to wait before pushing to avoid doing ref counting.
+	}
 	it.waste.push(it.item)
 
 	// Set next item to current
@@ -360,6 +366,14 @@ func isDeleted(meta byte) bool {
 	return meta&bitDelete > 0
 }
 
+func (it *Iterator) setItem(item *Item) {
+	if it.item == nil {
+		it.item = item
+	} else {
+		it.data.push(item)
+	}
+}
+
 // parseItem is a complex function because it needs to handle both forward and reverse iteration
 // implementation. We store keys such that their versions are sorted in descending order. This makes
 // forward iteration efficient, but revese iteration complicated. This tradeoff is better because
@@ -370,16 +384,8 @@ func (it *Iterator) parseItem() bool {
 	mi := it.iitr
 	key := mi.Key()
 
-	setItem := func(item *Item) {
-		if it.item == nil {
-			it.item = item
-		} else {
-			it.data.push(item)
-		}
-	}
-
 	// Skip badger keys.
-	if !it.opt.internalAccess && bytes.HasPrefix(key, badgerPrefix) {
+	if !it.opt.internalAccess && key[0] == '!' {
 		mi.Next()
 		return false
 	}
@@ -394,9 +400,10 @@ func (it *Iterator) parseItem() bool {
 	if it.opt.AllVersions {
 		// Return deleted or expired values also, otherwise user can't figure out
 		// whether the key was deleted.
+		it.iitr.FillValue(&it.vs)
 		item := it.newItem()
 		it.fill(item)
-		setItem(item)
+		it.setItem(item)
 		mi.Next()
 		return true
 	}
@@ -418,8 +425,8 @@ func (it *Iterator) parseItem() bool {
 
 FILL:
 	// If deleted, advance and return.
-	vs := mi.Value()
-	if isDeleted(vs.Meta) {
+	mi.FillValue(&it.vs)
+	if isDeleted(it.vs.Meta) {
 		mi.Next()
 		return false
 	}
@@ -431,7 +438,7 @@ FILL:
 
 	mi.Next()                           // Advance but no fill item yet.
 	if !it.opt.Reverse || !mi.Valid() { // Forward direction, or invalid.
-		setItem(item)
+		it.setItem(item)
 		return true
 	}
 
@@ -443,20 +450,23 @@ FILL:
 		goto FILL
 	}
 	// Ignore the next candidate. Return the current one.
-	setItem(item)
+	it.setItem(item)
 	return true
 }
 
 func (it *Iterator) fill(item *Item) {
-	vs := it.iitr.Value()
-	item.meta = vs.Meta
-	item.userMeta = vs.UserMeta
+	item.meta = it.vs.Meta
+	item.userMeta = it.vs.UserMeta
 
 	key := it.iitr.Key()
 	item.version = y.ParseTs(key)
-	item.key = y.SafeCopy(item.key, y.ParseKey(key))
-
-	item.vptr = y.SafeCopy(item.vptr, vs.Value)
+	if it.opt.PrefetchValues {
+		item.key = y.SafeCopy(item.key, y.ParseKey(key))
+		item.vptr = y.SafeCopy(item.vptr, it.vs.Value)
+	} else {
+		item.key = y.ParseKey(key)
+		item.vptr = it.vs.Value
+	}
 	item.val = nil
 	if it.opt.PrefetchValues {
 		item.wg.Add(1)

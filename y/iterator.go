@@ -66,6 +66,7 @@ type Iterator interface {
 	Seek(key []byte)
 	Key() []byte
 	Value() ValueStruct
+	FillValue(vs *ValueStruct)
 	Valid() bool
 
 	// All iterators should be closed so that file garbage collection works.
@@ -84,7 +85,6 @@ type MergeIterator struct {
 type mergeIteratorChild struct {
 	valid bool
 	key   []byte
-	val   ValueStruct
 	iter  Iterator
 	merge *MergeIterator
 }
@@ -94,13 +94,11 @@ func (child *mergeIteratorChild) reset() {
 		child.valid = child.merge.smaller.valid
 		if child.valid {
 			child.key = child.merge.smaller.key
-			child.val = child.merge.smaller.val
 		}
 	} else {
 		child.valid = child.iter.Valid()
 		if child.valid {
 			child.key = child.iter.Key()
-			child.val = child.iter.Value()
 		}
 	}
 }
@@ -186,7 +184,15 @@ func (mt *MergeIterator) Key() []byte {
 
 // Value returns the value associated with the iterator.
 func (mt *MergeIterator) Value() ValueStruct {
-	return mt.smaller.val
+	return mt.smaller.iter.Value()
+}
+
+func (mt *MergeIterator) FillValue(vs *ValueStruct) {
+	if mt.smaller.merge != nil {
+		mt.smaller.merge.FillValue(vs)
+	} else {
+		mt.smaller.iter.FillValue(vs)
+	}
 }
 
 // Close implements y.Iterator

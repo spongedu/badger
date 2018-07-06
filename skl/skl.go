@@ -426,6 +426,12 @@ func (s *Iterator) Value() y.ValueStruct {
 	return s.list.arena.getVal(valOffset, valSize)
 }
 
+// FillValue fills value.
+func (s *Iterator) FillValue(vs *y.ValueStruct) {
+	valOffset, valSize := s.n.getValueOffset()
+	s.list.arena.fillVal(vs, valOffset, valSize)
+}
+
 // Next advances to the next position.
 func (s *Iterator) Next() {
 	y.AssertTrue(s.Valid())
@@ -508,6 +514,9 @@ func (s *UniIterator) Key() []byte { return s.iter.Key() }
 
 // Value implements y.Interface
 func (s *UniIterator) Value() y.ValueStruct { return s.iter.Value() }
+
+// FillValue implements y.Interface
+func (s *UniIterator) FillValue(vs *y.ValueStruct) { s.iter.FillValue(vs) }
 
 // Valid implements y.Interface
 func (s *UniIterator) Valid() bool { return s.iter.Valid() }
