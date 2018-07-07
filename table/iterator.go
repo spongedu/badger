@@ -33,6 +33,7 @@ type blockIterator struct {
 	key []byte
 	val []byte
 
+	keyPrefixLen    uint16
 	entryEndOffsets []uint32
 }
 
@@ -40,6 +41,7 @@ func (itr *blockIterator) setBlock(b block) {
 	itr.err = nil
 	itr.idx = 0
 	itr.baseKey = itr.baseKey[:0]
+	itr.keyPrefixLen = 0
 	itr.key = itr.key[:0]
 	itr.val = itr.val[:0]
 	itr.data = b.data
@@ -100,18 +102,22 @@ func (itr *blockIterator) setIdx(i int) {
 		startOffset = int(itr.entryEndOffsets[i-1])
 	}
 	endOffset := int(itr.entryEndOffsets[i])
+	entryData := itr.data[startOffset:endOffset]
 	var h header
-	h.Decode(itr.data[startOffset:])
+	h.Decode(entryData)
 	if len(itr.baseKey) == 0 {
 		var baseHeader header
 		baseHeader.Decode(itr.data)
 		itr.baseKey = itr.data[headerSize : headerSize+baseHeader.klen]
 	}
-	prefixKey := itr.baseKey[:h.plen]
-	itr.key = append(itr.key[:0], prefixKey...)
-	diffKey := itr.data[startOffset+headerSize : startOffset+headerSize+int(h.klen)]
-	itr.key = append(itr.key, diffKey...)
-	itr.val = itr.data[startOffset+headerSize+int(h.klen) : endOffset]
+	if h.plen > itr.keyPrefixLen {
+		itr.key = append(itr.key[:0], itr.baseKey[:h.plen]...)
+	}
+	itr.keyPrefixLen = h.plen
+	valueOff := headerSize + int(h.klen)
+	diffKey := entryData[headerSize:valueOff]
+	itr.key = append(itr.key[:h.plen], diffKey...)
+	itr.val = entryData[valueOff:]
 }
 
 func (itr *blockIterator) next() {
@@ -325,6 +331,11 @@ func (itr *Iterator) Value() (ret y.ValueStruct) {
 	return
 }
 
+// FillValue fill the value struct.
+func (itr *Iterator) FillValue(vs *y.ValueStruct) {
+	vs.Decode(itr.bi.val)
+}
+
 // Next follows the y.Iterator interface
 func (itr *Iterator) Next() {
 	if !itr.reversed {
@@ -416,6 +427,10 @@ func (s *ConcatIterator) Key() []byte {
 // Value implements y.Interface
 func (s *ConcatIterator) Value() y.ValueStruct {
 	return s.cur.Value()
+}
+
+func (s *ConcatIterator) FillValue(vs *y.ValueStruct) {
+	s.cur.FillValue(vs)
 }
 
 // Seek brings us to element >= key if reversed is false. Otherwise, <= key.

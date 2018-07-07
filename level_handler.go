@@ -276,6 +276,11 @@ func (s *levelHandler) appendIterators(iters []y.Iterator, reversed bool) []y.It
 		// The newer table at the end of s.tables should be added first as it takes precedence.
 		return appendIteratorsReversed(iters, s.tables, reversed)
 	}
+	if len(s.tables) == 0 {
+		return iters
+	} else if len(s.tables) == 1 {
+		return append(iters, s.tables[0].NewIterator(reversed))
+	}
 	return append(iters, table.NewConcatIterator(s.tables, reversed))
 }
 

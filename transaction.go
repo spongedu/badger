@@ -172,6 +172,14 @@ func (pi *pendingWritesIterator) Value() y.ValueStruct {
 	}
 }
 
+func (pi *pendingWritesIterator) FillValue(vs *y.ValueStruct) {
+	entry := pi.entries[pi.nextIdx]
+	vs.Value = entry.Value
+	vs.Meta = entry.meta
+	vs.UserMeta = entry.UserMeta
+	vs.Version = pi.readTs
+}
+
 func (pi *pendingWritesIterator) Valid() bool {
 	return pi.nextIdx < len(pi.entries)
 }

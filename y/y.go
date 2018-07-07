@@ -126,7 +126,6 @@ func CompareKeys(key1 []byte, key2 []byte) int {
 	}
 	origKey1Len := len(key1) - 8
 	origkey2Len := len(key2) - 8
-	AssertTrue(origKey1Len > 0 && origkey2Len > 0)
 	return bytes.Compare(key1[:origKey1Len], key2[:origkey2Len])
 }
 
@@ -144,7 +143,13 @@ func SameKey(src, dst []byte) bool {
 	if len(src) != len(dst) {
 		return false
 	}
-	return bytes.Equal(ParseKey(src), ParseKey(dst))
+	srcKey := ParseKey(src)
+	dstKey := ParseKey(dst)
+	lastIdx := len(srcKey) - 1
+	if srcKey[lastIdx] != dstKey[lastIdx] {
+		return false
+	}
+	return bytes.Equal(srcKey, dstKey)
 }
 
 // Slice holds a reusable buf, will reallocate if you request a larger size than ever before.
