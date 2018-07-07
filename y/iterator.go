@@ -40,6 +40,7 @@ func (v *ValueStruct) Decode(b []byte) {
 	v.Meta = b[0]
 	v.UserMeta = b[1]
 	v.Value = b[2:]
+	// Reset the Version because *ValueStruct may be reused.
 	v.Version = 0
 }
 

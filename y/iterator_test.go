@@ -77,7 +77,7 @@ func (s *SimpleIterator) Value() ValueStruct {
 }
 func (s *SimpleIterator) FillValue(vs *ValueStruct) {
 	vs.Value = s.vals[s.idx]
-	vs.UserMeta = 55
+	vs.UserMeta = 55 // arbitrary value for test
 	vs.Meta = 0
 }
 func (s *SimpleIterator) Valid() bool {
