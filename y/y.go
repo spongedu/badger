@@ -149,7 +149,7 @@ func SameKey(src, dst []byte) bool {
 	if srcKey[lastIdx] != dstKey[lastIdx] {
 		return false
 	}
-	return bytes.Equal(ParseKey(src), ParseKey(dst))
+	return bytes.Equal(srcKey, dstKey)
 }
 
 // Slice holds a reusable buf, will reallocate if you request a larger size than ever before.
