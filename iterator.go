@@ -260,6 +260,7 @@ type Iterator struct {
 
 	opt   IteratorOptions
 	item  *Item
+	itBuf Item
 	vs    y.ValueStruct
 	data  list
 	waste list
@@ -294,6 +295,8 @@ func (txn *Txn) NewIterator(opt IteratorOptions) *Iterator {
 		opt:    opt,
 		readTs: txn.readTs,
 	}
+	res.itBuf.db = txn.db
+	res.itBuf.txn = txn
 	return res
 }
 
@@ -344,6 +347,12 @@ func (it *Iterator) Close() {
 // Next would advance the iterator by one. Always check it.Valid() after a Next()
 // to ensure you have access to a valid it.Item().
 func (it *Iterator) Next() {
+	if !it.opt.Reverse && !it.opt.PrefetchValues {
+		it.iitr.Next()
+		it.parseItemForwardNoPrefetch()
+		return
+	}
+
 	// Reuse current item
 	if it.opt.PrefetchValues {
 		it.item.wg.Wait() // Just cleaner to wait before pushing to avoid doing ref counting.
@@ -360,6 +369,54 @@ func (it *Iterator) Next() {
 			break
 		}
 	}
+}
+
+func (it *Iterator) parseItemForwardNoPrefetch() {
+	iitr := it.iitr
+	for iitr.Valid() {
+		keyWithTS := iitr.Key()
+		version := y.ParseTs(keyWithTS)
+		if version > it.readTs {
+			iitr.Next()
+			continue
+		}
+		key := y.ParseKey(keyWithTS)
+		if !it.opt.AllVersions {
+			if possibleSameKey(it.lastKey, key) && bytes.Equal(it.lastKey, key) {
+				iitr.Next()
+				continue
+			}
+			it.lastKey = y.SafeCopy(it.lastKey, key)
+			iitr.FillValue(&it.vs)
+			if isDeleted(it.vs.Meta) {
+				iitr.Next()
+				continue
+			}
+		} else {
+			iitr.FillValue(&it.vs)
+		}
+		item := &it.itBuf
+		item.version = version
+		item.key = key
+		item.meta = it.vs.Meta
+		item.userMeta = it.vs.UserMeta
+		item.vptr = it.vs.Value
+		item.val = nil
+		it.item = item
+		return
+	}
+	it.item = nil
+}
+
+func possibleSameKey(aKey, bKey []byte) bool {
+	if len(aKey) != len(bKey) {
+		return false
+	}
+	lastIdx := len(aKey) - 1
+	if aKey[lastIdx] != bKey[lastIdx] {
+		return false
+	}
+	return true
 }
 
 func isDeleted(meta byte) bool {
@@ -460,13 +517,8 @@ func (it *Iterator) fill(item *Item) {
 
 	key := it.iitr.Key()
 	item.version = y.ParseTs(key)
-	if it.opt.PrefetchValues {
-		item.key = y.SafeCopy(item.key, y.ParseKey(key))
-		item.vptr = y.SafeCopy(item.vptr, it.vs.Value)
-	} else {
-		item.key = y.ParseKey(key)
-		item.vptr = it.vs.Value
-	}
+	item.key = y.SafeCopy(item.key, y.ParseKey(key))
+	item.vptr = y.SafeCopy(item.vptr, it.vs.Value)
 	item.val = nil
 	if it.opt.PrefetchValues {
 		item.wg.Add(1)
@@ -502,12 +554,18 @@ func (it *Iterator) prefetch() {
 // greater than provided if iterating in the forward direction. Behavior would be reversed is
 // iterating backwards.
 func (it *Iterator) Seek(key []byte) {
+	it.lastKey = it.lastKey[:0]
+	if !it.opt.Reverse && !it.opt.PrefetchValues {
+		key = y.KeyWithTs(key, it.txn.readTs)
+		it.iitr.Seek(key)
+		it.parseItemForwardNoPrefetch()
+		return
+	}
 	for i := it.data.pop(); i != nil; i = it.data.pop() {
 		i.wg.Wait()
 		it.waste.push(i)
 	}
 
-	it.lastKey = it.lastKey[:0]
 	if len(key) == 0 {
 		it.iitr.Rewind()
 		it.prefetch()
@@ -527,6 +585,12 @@ func (it *Iterator) Seek(key []byte) {
 // smallest key if iterating forward, and largest if iterating backward. It does not keep track of
 // whether the cursor started with a Seek().
 func (it *Iterator) Rewind() {
+	it.lastKey = it.lastKey[:0]
+	if !it.opt.Reverse && !it.opt.PrefetchValues {
+		it.iitr.Rewind()
+		it.parseItemForwardNoPrefetch()
+		return
+	}
 	i := it.data.pop()
 	for i != nil {
 		i.wg.Wait() // Just cleaner to wait before pushing. No ref counting needed.
@@ -534,7 +598,6 @@ func (it *Iterator) Rewind() {
 		i = it.data.pop()
 	}
 
-	it.lastKey = it.lastKey[:0]
 	it.iitr.Rewind()
 	it.prefetch()
 }
