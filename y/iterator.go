@@ -55,8 +55,7 @@ func (v *ValueStruct) Encode(b []byte) {
 // this function exists is to avoid creating byte arrays per key-value pair in
 // table/builder.go.
 func (v *ValueStruct) EncodeTo(buf []byte) []byte {
-	buf = append(buf, v.Meta)
-	buf = append(buf, v.UserMeta)
+	buf = append(buf, v.Meta, v.UserMeta)
 	buf = append(buf, v.Value...)
 	return buf
 }
