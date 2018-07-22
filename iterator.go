@@ -19,9 +19,12 @@ package badger
 import (
 	"bytes"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 
+	"github.com/coocood/badger/skl"
+	"github.com/coocood/badger/table"
 	"github.com/coocood/badger/y"
 )
 
@@ -239,8 +242,100 @@ type IteratorOptions struct {
 	PrefetchSize int
 	Reverse      bool // Direction of iteration. False is forward, true is backward.
 	AllVersions  bool // Fetch all valid versions of the same key.
+	StartKey     []byte
+	EndKey       []byte
 
 	internalAccess bool // Used to allow internal access to badger keys.
+}
+
+func (opts IteratorOptions) hasRange() bool {
+	return len(opts.StartKey) > 0 && len(opts.EndKey) > 0
+}
+
+func (opts IteratorOptions) OverlapPending(it *pendingWritesIterator) bool {
+	if it == nil {
+		return false
+	}
+	if !opts.hasRange() {
+		return true
+	}
+	if bytes.Compare(opts.EndKey, it.entries[0].Key) <= 0 {
+		return false
+	}
+	if bytes.Compare(opts.StartKey, it.entries[len(it.entries)-1].Key) > 0 {
+		return false
+	}
+	return true
+}
+
+func (opts IteratorOptions) OverlapMemTable(t *skl.Skiplist) bool {
+	if t.Empty() {
+		return false
+	}
+	if !opts.hasRange() {
+		return true
+	}
+	iter := t.NewIterator()
+	defer iter.Close()
+	iter.Seek(opts.StartKey)
+	if !iter.Valid() {
+		return false
+	}
+	if bytes.Compare(iter.Key(), opts.EndKey) >= 0 {
+		return false
+	}
+	return true
+}
+
+func (opts IteratorOptions) OverlapTable(t *table.Table) bool {
+	if !opts.hasRange() {
+		return true
+	}
+	if bytes.Compare(opts.EndKey, t.Smallest()) <= 0 {
+		return false
+	}
+	if bytes.Compare(opts.StartKey, t.Biggest()) > 0 {
+		return false
+	}
+	iter := t.NewIterator(false)
+	defer iter.Close()
+	iter.Seek(opts.StartKey)
+	if !iter.Valid() {
+		return false
+	}
+	if bytes.Compare(iter.Key(), opts.EndKey) >= 0 {
+		return false
+	}
+	return true
+}
+
+func (opts IteratorOptions) OverlapTables(tables []*table.Table) []*table.Table {
+	if len(tables) == 0 {
+		return nil
+	}
+	if !opts.hasRange() {
+		return tables
+	}
+	startIdx := sort.Search(len(tables), func(i int) bool {
+		t := tables[i]
+		return bytes.Compare(opts.StartKey, t.Biggest()) <= 0
+	})
+	if startIdx == len(tables) {
+		return nil
+	}
+	tables = tables[startIdx:]
+	endIdx := sort.Search(len(tables), func(i int) bool {
+		t := tables[i]
+		return bytes.Compare(t.Smallest(), opts.EndKey) >= 0
+	})
+	tables = tables[:endIdx]
+	overlapTables := make([]*table.Table, 0, 8)
+	for _, t := range tables {
+		if opts.OverlapTable(t) {
+			overlapTables = append(overlapTables, t)
+		}
+	}
+	return overlapTables
 }
 
 // DefaultIteratorOptions contains default options when iterating over Badger key-value stores.
@@ -278,19 +373,18 @@ func (txn *Txn) NewIterator(opt IteratorOptions) *Iterator {
 	defer decr()
 	txn.db.vlog.incrIteratorCount()
 	var iters []y.Iterator
-	if itr := txn.newPendingWritesIterator(opt.Reverse); itr != nil {
+	if itr := txn.newPendingWritesIterator(opt.Reverse); opt.OverlapPending(itr) {
 		iters = append(iters, itr)
 	}
 	for i := 0; i < len(tables); i++ {
-		if tables[i].Empty() {
-			continue
+		if opt.OverlapMemTable(tables[i]) {
+			iters = append(iters, tables[i].NewUniIterator(opt.Reverse))
 		}
-		iters = append(iters, tables[i].NewUniIterator(opt.Reverse))
 	}
-	iters = txn.db.lc.appendIterators(iters, opt.Reverse) // This will increment references.
+	iters = txn.db.lc.appendIterators(iters, opt) // This will increment references.
 	res := &Iterator{
 		txn:    txn,
-		iitr:   y.NewMergeIterator(iters, opt.Reverse),
+		iitr:   table.NewMergeIterator(iters, opt.Reverse),
 		opt:    opt,
 		readTs: txn.readTs,
 	}
