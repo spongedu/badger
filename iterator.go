@@ -248,11 +248,11 @@ type IteratorOptions struct {
 	internalAccess bool // Used to allow internal access to badger keys.
 }
 
-func (opts IteratorOptions) hasRange() bool {
+func (opts *IteratorOptions) hasRange() bool {
 	return len(opts.StartKey) > 0 && len(opts.EndKey) > 0
 }
 
-func (opts IteratorOptions) OverlapPending(it *pendingWritesIterator) bool {
+func (opts *IteratorOptions) OverlapPending(it *pendingWritesIterator) bool {
 	if it == nil {
 		return false
 	}
@@ -268,7 +268,7 @@ func (opts IteratorOptions) OverlapPending(it *pendingWritesIterator) bool {
 	return true
 }
 
-func (opts IteratorOptions) OverlapMemTable(t *skl.Skiplist) bool {
+func (opts *IteratorOptions) OverlapMemTable(t *skl.Skiplist) bool {
 	if t.Empty() {
 		return false
 	}
@@ -287,7 +287,7 @@ func (opts IteratorOptions) OverlapMemTable(t *skl.Skiplist) bool {
 	return true
 }
 
-func (opts IteratorOptions) OverlapTable(t *table.Table) bool {
+func (opts *IteratorOptions) OverlapTable(t *table.Table) bool {
 	if !opts.hasRange() {
 		return true
 	}
@@ -309,7 +309,7 @@ func (opts IteratorOptions) OverlapTable(t *table.Table) bool {
 	return true
 }
 
-func (opts IteratorOptions) OverlapTables(tables []*table.Table) []*table.Table {
+func (opts *IteratorOptions) OverlapTables(tables []*table.Table) []*table.Table {
 	if len(tables) == 0 {
 		return nil
 	}
