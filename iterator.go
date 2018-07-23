@@ -242,6 +242,9 @@ type IteratorOptions struct {
 	PrefetchSize int
 	Reverse      bool // Direction of iteration. False is forward, true is backward.
 	AllVersions  bool // Fetch all valid versions of the same key.
+
+	// StartKey and EndKey are used to prune non-overlapping table iterators.
+	// They are not boundary limits.
 	StartKey     []byte
 	EndKey       []byte
 

@@ -10,6 +10,8 @@ import (
 type MergeIterator struct {
 	smaller mergeIteratorChild
 	bigger  mergeIteratorChild
+
+	// when the two iterators has the same value, the value in the second iterator is ignored.
 	second  y.Iterator
 	reverse bool
 }
@@ -49,6 +51,7 @@ func (mt *MergeIterator) fix() {
 	for mt.smaller.valid {
 		cmp = y.CompareKeys(mt.smaller.key, mt.bigger.key)
 		if cmp == 0 {
+			// Ignore the value in second iterator.
 			mt.second.Next()
 			var secondValid bool
 			if mt.second == mt.smaller.iter {
