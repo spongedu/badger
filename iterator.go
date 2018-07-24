@@ -245,8 +245,8 @@ type IteratorOptions struct {
 
 	// StartKey and EndKey are used to prune non-overlapping table iterators.
 	// They are not boundary limits.
-	StartKey     []byte
-	EndKey       []byte
+	StartKey []byte
+	EndKey   []byte
 
 	internalAccess bool // Used to allow internal access to badger keys.
 }

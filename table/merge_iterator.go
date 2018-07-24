@@ -17,11 +17,19 @@ type MergeIterator struct {
 }
 
 type mergeIteratorChild struct {
-	valid  bool
-	key    []byte
-	iter   y.Iterator
+	valid bool
+	key   []byte
+	iter  y.Iterator
+
+	// The two iterators are type asserted from `y.Iterator`, used to inline more function calls.
 	merge  *MergeIterator
 	concat *ConcatIterator
+}
+
+func (child *mergeIteratorChild) setIterator(iter y.Iterator) {
+	child.iter = iter
+	child.merge, _ = iter.(*MergeIterator)
+	child.concat, _ = iter.(*ConcatIterator)
 }
 
 func (child *mergeIteratorChild) reset() {
@@ -161,12 +169,8 @@ func NewMergeIterator(iters []y.Iterator, reverse bool) y.Iterator {
 			second:  iters[1],
 			reverse: reverse,
 		}
-		mi.smaller.iter = iters[0]
-		mi.smaller.merge, _ = mi.smaller.iter.(*MergeIterator)
-		mi.smaller.concat, _ = mi.smaller.iter.(*ConcatIterator)
-		mi.bigger.iter = iters[1]
-		mi.bigger.merge, _ = mi.bigger.iter.(*MergeIterator)
-		mi.bigger.concat, _ = mi.bigger.iter.(*ConcatIterator)
+		mi.smaller.setIterator(iters[0])
+		mi.bigger.setIterator(iters[1])
 		return mi
 	}
 	mid := len(iters) / 2
