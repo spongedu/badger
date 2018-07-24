@@ -31,7 +31,8 @@ import (
 type prefetchStatus uint8
 
 const (
-	prefetched prefetchStatus = iota + 1
+	prefetched prefetchStatus = 1
+	noPrefetch prefetchStatus = 2
 )
 
 // Item is returned during iteration. Both the Key() and Value() output is only valid until
@@ -46,7 +47,7 @@ type Item struct {
 	meta     byte // We need to store meta to know about bitValuePointer.
 	userMeta byte
 	val      []byte
-	slice    *y.Slice // Used only during prefetching.
+	slice    *y.Slice
 	next     *Item
 	version  uint64
 	txn      *Txn
@@ -88,6 +89,14 @@ func (item *Item) Version() uint64 {
 // instead, or copy it yourself. Value might change once discard or commit is called.
 // Use ValueCopy if you want to do a Set after Get.
 func (item *Item) Value() ([]byte, error) {
+	if item.status == noPrefetch {
+		if (item.meta & bitValuePointer) == 0 {
+			return item.vptr, nil
+		}
+		var vp valuePointer
+		vp.Decode(item.vptr)
+		return item.db.vlog.Read(vp, item.slice)
+	}
 	item.wg.Wait()
 	if item.status == prefetched {
 		return item.val, item.err
@@ -393,6 +402,10 @@ func (txn *Txn) NewIterator(opt IteratorOptions) *Iterator {
 	}
 	res.itBuf.db = txn.db
 	res.itBuf.txn = txn
+	if !opt.PrefetchValues {
+		res.itBuf.status = noPrefetch
+		res.itBuf.slice = new(y.Slice)
+	}
 	return res
 }
 
