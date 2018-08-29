@@ -107,7 +107,7 @@ func replayFunction(out *DB) func(Entry, valuePointer) error {
 		copy(nk, e.Key)
 		var nv []byte
 		meta := e.meta
-		if out.shouldWriteValueToLSM(e) {
+		if out.shouldWriteValueToLSM(&e) {
 			nv = make([]byte, len(e.Value))
 			copy(nv, e.Value)
 		} else {
@@ -290,8 +290,7 @@ func Open(opt Options) (db *DB, err error) {
 	// out.lastUsedCasCounter = item.casCounter
 	// TODO: Figure this out. This would update the read timestamp, and set nextCommitTs.
 
-	replayCloser := y.NewCloser(1)
-	go db.doWrites(replayCloser)
+	replayCloser := startWriteWorker(db)
 
 	if err = db.vlog.Replay(vptr, replayFunction(db)); err != nil {
 		return db, err
@@ -302,8 +301,7 @@ func Open(opt Options) (db *DB, err error) {
 	db.orc.nextCommit = db.orc.curRead + 1
 
 	db.writeCh = make(chan *request, kvWriteChCapacity)
-	db.closers.writes = y.NewCloser(1)
-	go db.doWrites(db.closers.writes)
+	db.closers.writes = startWriteWorker(db)
 
 	db.closers.valueGC = y.NewCloser(1)
 	go db.vlog.waitOnGC(db.closers.valueGC)
@@ -441,11 +439,9 @@ func syncDir(dir string) error {
 
 // getMemtables returns the current memtables and get references.
 func (db *DB) getMemTables() ([]*skl.Skiplist, func()) {
+	tables := make([]*skl.Skiplist, 1, 8)
 	db.RLock()
 	defer db.RUnlock()
-
-	tables := make([]*skl.Skiplist, len(db.imm)+1)
-
 	// Get mutable memtable.
 	tables[0] = db.mt
 	tables[0].IncrRef()
@@ -453,8 +449,9 @@ func (db *DB) getMemTables() ([]*skl.Skiplist, func()) {
 	// Get immutable memtables.
 	last := len(db.imm) - 1
 	for i := range db.imm {
-		tables[i+1] = db.imm[last-i]
-		tables[i+1].IncrRef()
+		immt := db.imm[last-i]
+		immt.IncrRef()
+		tables = append(tables, immt)
 	}
 	return tables, func() {
 		for _, tbl := range tables {
@@ -511,90 +508,8 @@ var requestPool = sync.Pool{
 	},
 }
 
-func (db *DB) shouldWriteValueToLSM(e Entry) bool {
+func (db *DB) shouldWriteValueToLSM(e *Entry) bool {
 	return len(e.Value) < db.opt.ValueThreshold
-}
-
-func (db *DB) writeToLSM(b *request) error {
-	if len(b.Ptrs) != len(b.Entries) {
-		return errors.Errorf("Ptrs and Entries don't match: %+v", b)
-	}
-
-	for i, entry := range b.Entries {
-		if entry.meta&bitFinTxn != 0 {
-			continue
-		}
-		if db.shouldWriteValueToLSM(*entry) { // Will include deletion / tombstone case.
-			db.mt.Put(entry.Key,
-				y.ValueStruct{
-					Value:    entry.Value,
-					Meta:     entry.meta,
-					UserMeta: entry.UserMeta,
-				})
-		} else {
-			var offsetBuf [vptrSize]byte
-			db.mt.Put(entry.Key,
-				y.ValueStruct{
-					Value:    b.Ptrs[i].Encode(offsetBuf[:]),
-					Meta:     entry.meta | bitValuePointer,
-					UserMeta: entry.UserMeta,
-				})
-		}
-	}
-	return nil
-}
-
-// writeRequests is called serially by only one goroutine.
-func (db *DB) writeRequests(reqs []*request) error {
-	if len(reqs) == 0 {
-		return nil
-	}
-
-	done := func(err error) {
-		for _, r := range reqs {
-			r.Err = err
-			r.Wg.Done()
-		}
-	}
-
-	log.Debugf("writeRequests called. Writing to value log")
-
-	err := db.vlog.write(reqs)
-	if err != nil {
-		done(err)
-		return err
-	}
-
-	var count int
-	for _, b := range reqs {
-		if len(b.Entries) == 0 {
-			continue
-		}
-		count += len(b.Entries)
-		var i uint64
-		for err := db.ensureRoomForWrite(); err == errNoRoom; err = db.ensureRoomForWrite() {
-			i++
-			if i%100 == 0 {
-				log.Warnf("Making room for writes")
-			}
-			// We need to poll a bit because both hasRoomForWrite and the flusher need access to s.imm.
-			// When flushChan is full and you are blocked there, and the flusher is trying to update s.imm,
-			// you will get a deadlock.
-			time.Sleep(10 * time.Millisecond)
-		}
-		if err != nil {
-			done(err)
-			return errors.Wrap(err, "writeRequests")
-		}
-		if err := db.writeToLSM(b); err != nil {
-			done(err)
-			return errors.Wrap(err, "writeRequests")
-		}
-		db.updateOffset(b.Ptrs)
-	}
-	done(nil)
-	log.Debugf("%d entries written", count)
-	return nil
 }
 
 func (db *DB) sendToWriteCh(entries []*Entry) (*request, error) {
@@ -613,70 +528,10 @@ func (db *DB) sendToWriteCh(entries []*Entry) (*request, error) {
 	req.Entries = entries
 	req.Wg = sync.WaitGroup{}
 	req.Wg.Add(1)
-	db.writeCh <- req // Handled in doWrites.
+	db.writeCh <- req // Handled in writeWorker.
 	y.NumPuts.Add(int64(len(entries)))
 
 	return req, nil
-}
-
-func (db *DB) doWrites(lc *y.Closer) {
-	defer lc.Done()
-	pendingCh := make(chan struct{}, 1)
-
-	writeRequests := func(reqs []*request) {
-		if err := db.writeRequests(reqs); err != nil {
-			log.Infof("ERROR in Badger::writeRequests: %v", err)
-		}
-		<-pendingCh
-	}
-
-	// This variable tracks the number of pending writes.
-	reqLen := new(expvar.Int)
-	y.PendingWrites.Set(db.opt.Dir, reqLen)
-
-	reqs := make([]*request, 0, 10)
-	for {
-		var r *request
-		select {
-		case r = <-db.writeCh:
-		case <-lc.HasBeenClosed():
-			goto closedCase
-		}
-
-		for {
-			reqs = append(reqs, r)
-			reqLen.Set(int64(len(reqs)))
-
-			if len(reqs) >= 3*kvWriteChCapacity {
-				pendingCh <- struct{}{} // blocking.
-				goto writeCase
-			}
-
-			select {
-			// Either push to pending, or continue to pick from writeCh.
-			case r = <-db.writeCh:
-			case pendingCh <- struct{}{}:
-				goto writeCase
-			case <-lc.HasBeenClosed():
-				goto closedCase
-			}
-		}
-
-	closedCase:
-		close(db.writeCh)
-		for r := range db.writeCh { // Flush the channel.
-			reqs = append(reqs, r)
-		}
-
-		pendingCh <- struct{}{} // Push to pending before doing a write.
-		writeRequests(reqs)
-		return
-
-	writeCase:
-		go writeRequests(reqs)
-		reqs = make([]*request, 0, 10)
-		reqLen.Set(0)
-	}
 }
 
 // batchSet applies a list of badger.Entry. If a request level error occurs it
@@ -714,27 +569,24 @@ var errNoRoom = errors.New("No room for write")
 
 // ensureRoomForWrite is always called serially.
 func (db *DB) ensureRoomForWrite() error {
-	var err error
-	db.Lock()
-	defer db.Unlock()
 	if db.mt.MemSize() < db.opt.MaxTableSize {
 		return nil
 	}
-
-	y.AssertTrue(db.mt != nil) // A nil mt indicates that DB is being closed.
+	newMemTable := skl.NewSkiplist(arenaSize(db.opt))
+	// Ensure value log is synced to disk so this memtable's contents wouldn't be lost.
+	err := db.vlog.sync()
+	if err != nil {
+		return err
+	}
+	db.Lock()
+	defer db.Unlock()
 	select {
 	case db.flushChan <- flushTask{db.mt, db.vptr}:
-		// Ensure value log is synced to disk so this memtable's contents wouldn't be lost.
-		err = db.vlog.sync()
-		if err != nil {
-			return err
-		}
-
 		log.Infof("Flushing memtable, mt.size=%d, size of flushChan: %d\n",
 			db.mt.MemSize(), len(db.flushChan))
 		// We manage to push this task. Let's modify imm.
 		db.imm = append(db.imm, db.mt)
-		db.mt = skl.NewSkiplist(arenaSize(db.opt))
+		db.mt = newMemTable
 		// New memtable is empty. We certainly have room.
 		return nil
 	default:
