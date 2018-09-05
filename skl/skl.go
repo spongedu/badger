@@ -34,7 +34,9 @@ package skl
 
 import (
 	"math"
+	"math/rand"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/coocood/badger/y"
@@ -78,6 +80,7 @@ type Skiplist struct {
 	head   *node
 	ref    int32
 	arena  *Arena
+	rng    rand.Source
 }
 
 // IncrRef increases the refcount
@@ -128,6 +131,7 @@ func NewSkiplist(arenaSize int64) *Skiplist {
 		head:   head,
 		arena:  arena,
 		ref:    1,
+		rng:    rand.NewSource(time.Now().UnixNano()),
 	}
 }
 
@@ -161,16 +165,13 @@ func (n *node) casNextOffset(h int, old, val uint32) bool {
 //	return n != nil && y.CompareKeys(key, n.key) > 0
 //}
 
-func randomHeight() int {
+func (s *Skiplist) randomHeight() int {
 	h := 1
-	for h < maxHeight && fastrand() <= heightIncrease {
+	for h < maxHeight && uint32(s.rng.Int63()) <= heightIncrease {
 		h++
 	}
 	return h
 }
-
-//go:linkname fastrand runtime.fastrand
-func fastrand() uint32
 
 func (s *Skiplist) getNext(nd *node, height int) *node {
 	return s.arena.getNode(nd.getNextOffset(height))
@@ -299,7 +300,7 @@ func (s *Skiplist) Put(key []byte, v y.ValueStruct) {
 	}
 
 	// We do need to create a new node.
-	height := randomHeight()
+	height := s.randomHeight()
 	x := newNode(s.arena, key, v, height)
 
 	// Try to increase s.height via CAS.

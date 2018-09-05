@@ -407,8 +407,8 @@ func TestIteratorSeek(t *testing.T) {
 
 func randomKey() []byte {
 	b := make([]byte, 8)
-	key := fastrand()
-	key2 := fastrand()
+	key := rand.Uint32()
+	key2 := rand.Uint32()
 	binary.LittleEndian.PutUint32(b, key)
 	binary.LittleEndian.PutUint32(b[4:], key2)
 	return y.KeyWithTs(b, 0)
