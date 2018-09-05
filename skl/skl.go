@@ -34,7 +34,6 @@ package skl
 
 import (
 	"math"
-	"math/rand"
 	"sync/atomic"
 	"unsafe"
 
@@ -164,11 +163,14 @@ func (n *node) casNextOffset(h int, old, val uint32) bool {
 
 func randomHeight() int {
 	h := 1
-	for h < maxHeight && rand.Uint32() <= heightIncrease {
+	for h < maxHeight && fastrand() <= heightIncrease {
 		h++
 	}
 	return h
 }
+
+//go:linkname fastrand runtime.fastrand
+func fastrand() uint32
 
 func (s *Skiplist) getNext(nd *node, height int) *node {
 	return s.arena.getNode(nd.getNextOffset(height))
