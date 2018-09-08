@@ -186,6 +186,7 @@ func (s *Skiplist) getNext(nd *node, height int) *node {
 func (s *Skiplist) findNear(key []byte, less bool, allowEqual bool) (*node, bool) {
 	x := s.head
 	level := int(s.getHeight() - 1)
+	var afterNode *node
 	for {
 		// Assume x.key < key.
 		next := s.getNext(x, level)
@@ -206,9 +207,14 @@ func (s *Skiplist) findNear(key []byte, less bool, allowEqual bool) (*node, bool
 			}
 			return x, false
 		}
-
-		nextKey := next.key(s.arena)
-		cmp := y.CompareKeys(key, nextKey)
+		var cmp int
+		if next == afterNode {
+			// We compared the same node on the upper level, no need to compare again.
+			cmp = -1
+		} else {
+			nextKey := next.key(s.arena)
+			cmp = y.CompareKeys(key, nextKey)
+		}
 		if cmp > 0 {
 			// x.key < next.key < key. We can continue to move right.
 			x = next
@@ -236,6 +242,7 @@ func (s *Skiplist) findNear(key []byte, less bool, allowEqual bool) (*node, bool
 		}
 		// cmp < 0. In other words, x.key < key < next.
 		if level > 0 {
+			afterNode = next
 			level--
 			continue
 		}
@@ -255,15 +262,21 @@ func (s *Skiplist) findNear(key []byte, less bool, allowEqual bool) (*node, bool
 // The input "before" tells us where to start looking.
 // If we found a node with the same key, then we return outBefore = outAfter.
 // Otherwise, outBefore.key < key < outAfter.key.
-func (s *Skiplist) findSpliceForLevel(key []byte, before *node, level int) (*node, *node) {
+func (s *Skiplist) findSpliceForLevel(key []byte, before, after *node, level int) (*node, *node) {
 	for {
 		// Assume before.key < key.
 		next := s.getNext(before, level)
 		if next == nil {
 			return before, next
 		}
-		nextKey := next.key(s.arena)
-		cmp := y.CompareKeys(key, nextKey)
+		var cmp int
+		if next == after {
+			// We compared the same node on the upper level, no need to compare again.
+			cmp = -1
+		} else {
+			nextKey := next.key(s.arena)
+			cmp = y.CompareKeys(key, nextKey)
+		}
 		if cmp == 0 {
 			// Equality case.
 			return next, next
@@ -292,7 +305,7 @@ func (s *Skiplist) Put(key []byte, v y.ValueStruct) {
 	next[listHeight] = nil
 	for i := int(listHeight) - 1; i >= 0; i-- {
 		// Use higher level to speed up for current level.
-		prev[i], next[i] = s.findSpliceForLevel(key, prev[i+1], i)
+		prev[i], next[i] = s.findSpliceForLevel(key, prev[i+1], next[i+1], i)
 		if prev[i] == next[i] {
 			prev[i].setValue(s.arena, v)
 			return
@@ -321,7 +334,7 @@ func (s *Skiplist) Put(key []byte, v y.ValueStruct) {
 				y.Assert(i > 1) // This cannot happen in base level.
 				// We haven't computed prev, next for this level because height exceeds old listHeight.
 				// For these levels, we expect the lists to be sparse, so we can just search from head.
-				prev[i], next[i] = s.findSpliceForLevel(key, s.head, i)
+				prev[i], next[i] = s.findSpliceForLevel(key, s.head, nil, i)
 				// Someone adds the exact same key before we are able to do so. This can only happen on
 				// the base level. But we know we are not on the base level.
 				y.Assert(prev[i] != next[i])
@@ -335,7 +348,7 @@ func (s *Skiplist) Put(key []byte, v y.ValueStruct) {
 			// CAS failed. We need to recompute prev and next.
 			// It is unlikely to be helpful to try to use a different level as we redo the search,
 			// because it is unlikely that lots of nodes are inserted between prev[i] and next[i].
-			prev[i], next[i] = s.findSpliceForLevel(key, prev[i], i)
+			prev[i], next[i] = s.findSpliceForLevel(key, prev[i], nil, i)
 			if prev[i] == next[i] {
 				y.Assert(i == 0)
 				prev[i].setValue(s.arena, v)
