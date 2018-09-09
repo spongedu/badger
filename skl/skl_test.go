@@ -28,6 +28,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"bytes"
 	"github.com/coocood/badger/y"
 )
 
@@ -403,6 +404,29 @@ func TestIteratorSeek(t *testing.T) {
 	require.True(t, it.Valid())
 	v = it.Value()
 	require.EqualValues(t, "01990", v.Value)
+}
+
+func TestPutWithHint(t *testing.T) {
+	l := NewSkiplist(arenaSize)
+	sp := new(Hint)
+	cnt := 0
+	for {
+		if l.arena.size() > arenaSize-256 {
+			break
+		}
+		key := randomKey()
+		l.PutWithHint(key, y.ValueStruct{Value: key}, sp)
+		cnt++
+	}
+	it := l.NewIterator()
+	var lastKey []byte
+	cntGot := 0
+	for it.SeekToFirst(); it.Valid(); it.Next() {
+		require.True(t, bytes.Compare(lastKey, it.Key()) <= 0)
+		require.True(t, bytes.Compare(it.Key(), it.Value().Value) == 0)
+		cntGot++
+	}
+	require.True(t, cntGot == cnt)
 }
 
 func randomKey() []byte {
