@@ -17,6 +17,7 @@
 package skl
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math/rand"
@@ -26,10 +27,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
-	"bytes"
 	"github.com/coocood/badger/y"
+	"github.com/stretchr/testify/require"
 )
 
 const arenaSize = 1 << 20
