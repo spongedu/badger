@@ -17,20 +17,23 @@
 package table
 
 import (
+	"bytes"
 	"fmt"
+	"github.com/coocood/badger/options"
+	"github.com/coocood/badger/y"
+	"github.com/stretchr/testify/require"
+	"math"
 	"math/rand"
 	"os"
 	"sort"
 	"testing"
-
-	"github.com/coocood/badger/options"
-	"github.com/coocood/badger/y"
-	"github.com/stretchr/testify/require"
 )
 
 func key(prefix string, i int) string {
 	return prefix + fmt.Sprintf("%04d", i)
 }
+
+var defaultBuilderOpt = options.TableBuilderOptions{EnableHashIndex: true, HashUtilRatio: 0.75}
 
 func buildTestTable(t *testing.T, prefix string, n int) *os.File {
 	y.Assert(n <= 10000)
@@ -45,7 +48,7 @@ func buildTestTable(t *testing.T, prefix string, n int) *os.File {
 
 // keyValues is n by 2 where n is number of pairs.
 func buildTable(t *testing.T, keyValues [][]string) *os.File {
-	b := NewTableBuilder(0)
+	b := NewTableBuilder(0, defaultBuilderOpt)
 	defer b.Close()
 	// TODO: Add test for file garbage collection here. No files should be left after the tests here.
 
@@ -94,6 +97,77 @@ func TestTableIterator(t *testing.T) {
 			}
 			require.Equal(t, count, n)
 		})
+	}
+}
+
+func TestHashIndexTS(t *testing.T) {
+	b := NewTableBuilder(0, defaultBuilderOpt)
+	defer b.Close()
+
+	filename := fmt.Sprintf("%s%s%d.sst", os.TempDir(), string(os.PathSeparator), rand.Int63())
+	f, err := y.OpenSyncedFile(filename, true)
+	if t != nil {
+		require.NoError(t, err)
+	} else {
+		y.Check(err)
+	}
+	keys := [][]byte{
+		y.KeyWithTs([]byte("key"), 9),
+		y.KeyWithTs([]byte("key"), 7),
+		y.KeyWithTs([]byte("key"), 5),
+		y.KeyWithTs([]byte("key"), 3),
+		y.KeyWithTs([]byte("key"), 1),
+	}
+	for _, k := range keys {
+		b.Add(k, y.ValueStruct{Value: k, Meta: 'A', UserMeta: 0})
+	}
+	f.Write(b.Finish())
+	f.Close()
+	f, _ = y.OpenSyncedFile(filename, true)
+	table, err := OpenTable(f, options.MemoryMap)
+
+	rk, _, ok := table.PointGet(y.KeyWithTs([]byte("key"), 10))
+	require.True(t, ok)
+	require.True(t, bytes.Compare(rk, keys[0]) == 0)
+
+	rk, _, ok = table.PointGet(y.KeyWithTs([]byte("key"), 6))
+	require.True(t, ok)
+	require.True(t, bytes.Compare(rk, keys[2]) == 0)
+
+	rk, _, ok = table.PointGet(y.KeyWithTs([]byte("key"), 2))
+	require.True(t, ok)
+	require.True(t, bytes.Compare(rk, keys[4]) == 0)
+}
+
+func TestPointGet(t *testing.T) {
+	f := buildTestTable(t, "key", 8000)
+	table, err := OpenTable(f, options.MemoryMap)
+	require.NoError(t, err)
+	defer table.DecrRef()
+
+	for i := 0; i < 8000; i++ {
+		k := y.KeyWithTs([]byte(key("key", i)), math.MaxUint64)
+		k, _, ok := table.PointGet(k)
+		if !ok {
+			// will fallback to seek
+			continue
+		}
+		require.NotNil(t, k, key("key", i)+" not find")
+		require.True(t, y.SameKey(k, k), "point get not point to correct key")
+	}
+
+	for i := 8000; i < 10000; i++ {
+		k := y.KeyWithTs([]byte(key("key", i)), math.MaxUint64)
+		rk, _, ok := table.PointGet(k)
+		if !ok {
+			// will fallback to seek
+			continue
+		}
+		if rk == nil {
+			// hash table says no entry, fast return
+			continue
+		}
+		require.False(t, y.SameKey(k, rk), "point get not point to correct key")
 	}
 }
 
@@ -625,7 +699,7 @@ func TestMergingIteratorTakeTwo(t *testing.T) {
 
 func BenchmarkRead(b *testing.B) {
 	n := 5 << 20
-	builder := NewTableBuilder(0)
+	builder := NewTableBuilder(0, defaultBuilderOpt)
 	filename := fmt.Sprintf("%s%s%d.sst", os.TempDir(), string(os.PathSeparator), rand.Int63())
 	f, err := y.OpenSyncedFile(filename, true)
 	y.Check(err)
@@ -653,9 +727,119 @@ func BenchmarkRead(b *testing.B) {
 	}
 }
 
+func BenchmarkBuildTable(b *testing.B) {
+	ns := []int{1000, 10000, 100000, 1000000, 5000000, 10000000, 15000000}
+	for _, n := range ns {
+		kvs := make([]struct{ k, v []byte }, n)
+		for i := 0; i < n; i++ {
+			kvs[i].k = y.KeyWithTs([]byte(fmt.Sprintf("%016x", i)), 0)
+			kvs[i].v = []byte(fmt.Sprintf("%d", i))
+		}
+		b.ResetTimer()
+
+		b.Run(fmt.Sprintf("NoHash_%d", n), func(b *testing.B) {
+			var result []byte
+			for bn := 0; bn < b.N; bn++ {
+				builder := NewTableBuilder(0, options.TableBuilderOptions{EnableHashIndex: false})
+				for i := 0; i < n; i++ {
+					y.Check(builder.Add(kvs[i].k, y.ValueStruct{Value: kvs[i].v, Meta: 123, UserMeta: 0}))
+				}
+				result = builder.Finish()
+			}
+			_ = result
+		})
+
+		b.Run(fmt.Sprintf("Hash_%d", n), func(b *testing.B) {
+			var result []byte
+			for bn := 0; bn < b.N; bn++ {
+				builder := NewTableBuilder(0, defaultBuilderOpt)
+				for i := 0; i < n; i++ {
+					y.Check(builder.Add(kvs[i].k, y.ValueStruct{Value: kvs[i].v, Meta: 123, UserMeta: 0}))
+				}
+				result = builder.Finish()
+			}
+			_ = result
+		})
+	}
+}
+
+func BenchmarkPointGet(b *testing.B) {
+	ns := []int{1000, 10000, 100000, 1000000, 5000000, 10000000, 15000000}
+	for _, n := range ns {
+		builder := NewTableBuilder(0, defaultBuilderOpt)
+		filename := fmt.Sprintf("%s%s%d.sst", os.TempDir(), string(os.PathSeparator), rand.Int63())
+		f, err := y.OpenSyncedFile(filename, true)
+		keys := make([][]byte, n)
+		y.Check(err)
+		for i := 0; i < n; i++ {
+			k := y.KeyWithTs([]byte(fmt.Sprintf("%016x", i)), 0)
+			v := fmt.Sprintf("%d", i)
+			keys[i] = k
+			y.Check(builder.Add([]byte(k), y.ValueStruct{Value: []byte(v), Meta: 123, UserMeta: 0}))
+		}
+
+		f.Write(builder.Finish())
+		tbl, err := OpenTable(f, options.MemoryMap)
+		y.Check(err)
+		b.ResetTimer()
+
+		b.Run(fmt.Sprintf("Seek_%d", n), func(b *testing.B) {
+			var vs y.ValueStruct
+			rand := rand.New(rand.NewSource(0))
+			for bn := 0; bn < b.N; bn++ {
+				rand.Seed(0)
+				for i := 0; i < n; i++ {
+					k := keys[rand.Intn(n)]
+					it := tbl.NewIteratorNoRef(false)
+					it.Seek(k)
+					if !it.Valid() {
+						continue
+					}
+					if !y.SameKey(k, it.Key()) {
+						continue
+					}
+					vs = it.Value()
+				}
+			}
+			_ = vs
+		})
+
+		b.Run(fmt.Sprintf("Hash_%d", n), func(b *testing.B) {
+			var (
+				resultKey []byte
+				resultVs  y.ValueStruct
+				ok        bool
+			)
+			rand := rand.New(rand.NewSource(0))
+			for bn := 0; bn < b.N; bn++ {
+				rand.Seed(0)
+				for i := 0; i < n; i++ {
+					k := keys[rand.Intn(n)]
+
+					resultKey, resultVs, ok = tbl.PointGet(k)
+					if !ok {
+						it := tbl.NewIteratorNoRef(false)
+						it.Seek(k)
+						if !it.Valid() {
+							continue
+						}
+						if !y.SameKey(k, it.Key()) {
+							continue
+						}
+						resultKey, resultVs = it.Key(), it.Value()
+					}
+				}
+			}
+			_, _ = resultKey, resultVs
+		})
+
+		tbl.DecrRef()
+	}
+}
+
 func BenchmarkReadAndBuild(b *testing.B) {
 	n := 5 << 20
-	builder := NewTableBuilder(0)
+	builder := NewTableBuilder(0, defaultBuilderOpt)
 	filename := fmt.Sprintf("%s%s%d.sst", os.TempDir(), string(os.PathSeparator), rand.Int63())
 	f, err := y.OpenSyncedFile(filename, true)
 	y.Check(err)
@@ -675,7 +859,7 @@ func BenchmarkReadAndBuild(b *testing.B) {
 	// Iterate b.N times over the entire table.
 	for i := 0; i < b.N; i++ {
 		func() {
-			newBuilder := NewTableBuilder(0)
+			newBuilder := NewTableBuilder(0, options.TableBuilderOptions{})
 			it := tbl.NewIterator(false)
 			defer it.Close()
 			for it.seekToFirst(); it.Valid(); it.next() {
@@ -695,7 +879,7 @@ func BenchmarkReadMerged(b *testing.B) {
 	var tables []*Table
 	for i := 0; i < m; i++ {
 		filename := fmt.Sprintf("%s%s%d.sst", os.TempDir(), string(os.PathSeparator), rand.Int63())
-		builder := NewTableBuilder(0)
+		builder := NewTableBuilder(0, defaultBuilderOpt)
 		f, err := y.OpenSyncedFile(filename, true)
 		y.Check(err)
 		for j := 0; j < tableSize; j++ {
