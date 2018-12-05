@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/coocood/badger/table"
 	"github.com/coocood/badger/y"
 	"github.com/ngaut/log"
 	"github.com/pkg/errors"
@@ -28,16 +29,19 @@ import (
 type writeWorker struct {
 	*DB
 	writeLSMCh chan []*request
+	mergeLSMCh chan *table.MemTable
 }
 
 func startWriteWorker(db *DB) *y.Closer {
-	closer := y.NewCloser(2)
+	closer := y.NewCloser(3)
 	w := &writeWorker{
 		DB:         db,
 		writeLSMCh: make(chan []*request, 1),
+		mergeLSMCh: make(chan *table.MemTable, 1),
 	}
 	go w.runWriteVLog(closer)
 	go w.runWriteLSM(closer)
+	go w.runMergeLSM(closer)
 	return closer
 }
 
@@ -72,9 +76,17 @@ func (w *writeWorker) runWriteLSM(lc *y.Closer) {
 	for {
 		reqs, ok := <-w.writeLSMCh
 		if !ok {
+			close(w.mergeLSMCh)
 			return
 		}
 		w.writeLSM(reqs)
+	}
+}
+
+func (w *writeWorker) runMergeLSM(lc *y.Closer) {
+	defer lc.Done()
+	for mt := range w.mergeLSMCh {
+		mt.MergeListToSkl()
 	}
 }
 
@@ -104,28 +116,13 @@ func (w *writeWorker) writeLSM(reqs []*request) {
 			continue
 		}
 		count += len(b.Entries)
-		var i uint64
-		var err error
-		for err = w.ensureRoomForWrite(); err == errNoRoom; err = w.ensureRoomForWrite() {
-			i++
-			if i%100 == 0 {
-				log.Warnf("Making room for writes")
-			}
-			// We need to poll a bit because both hasRoomForWrite and the flusher need access to s.imm.
-			// When flushChan is full and you are blocked there, and the flusher is trying to update s.imm,
-			// you will get a deadlock.
-			time.Sleep(10 * time.Millisecond)
-		}
-		if err != nil {
-			w.done(reqs, err)
-			return
-		}
-		if err := w.writeToLSM(b); err != nil {
+		if err := w.writeToLSM(b.Entries, b.Ptrs); err != nil {
 			w.done(reqs, err)
 			return
 		}
 		w.updateOffset(b.Ptrs)
 	}
+
 	w.done(reqs, nil)
 	log.Debugf("%d entries written", count)
 	return
@@ -141,31 +138,61 @@ func (w *writeWorker) done(reqs []*request, err error) {
 	}
 }
 
-func (w *writeWorker) writeToLSM(b *request) error {
-	if len(b.Ptrs) != len(b.Entries) {
-		return errors.Errorf("Ptrs and Entries don't match: %+v", b)
+func (w *writeWorker) writeToLSM(entries []*Entry, ptrs []valuePointer) error {
+	if len(ptrs) != len(entries) {
+		return errors.Errorf("Ptrs and Entries don't match: %v, %v", entries, ptrs)
 	}
 
-	for i, entry := range b.Entries {
+	var i uint64
+	var err error
+	for err = w.ensureRoomForWrite(); err == errNoRoom; err = w.ensureRoomForWrite() {
+		i++
+		if i%100 == 0 {
+			log.Warnf("Making room for writes")
+		}
+		// We need to poll a bit because both hasRoomForWrite and the flusher need access to s.imm.
+		// When flushChan is full and you are blocked there, and the flusher is trying to update s.imm,
+		// you will get a deadlock.
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		return err
+	}
+
+	es := make([]table.Entry, 0, len(entries)-1)
+	for i, entry := range entries {
 		if entry.meta&bitFinTxn != 0 {
 			continue
 		}
 		if w.shouldWriteValueToLSM(entry) { // Will include deletion / tombstone case.
-			w.mt.Put(entry.Key,
-				y.ValueStruct{
+			es = append(es, table.Entry{
+				Key: entry.Key,
+				Value: y.ValueStruct{
 					Value:    entry.Value,
 					Meta:     entry.meta,
 					UserMeta: entry.UserMeta,
-				})
+					Version:  y.ParseTs(entry.Key),
+				},
+			})
 		} else {
-			var offsetBuf [vptrSize]byte
-			w.mt.Put(entry.Key,
-				y.ValueStruct{
-					Value:    b.Ptrs[i].Encode(offsetBuf[:]),
+			var offsetBuf []byte
+			if len(entry.Value) < vptrSize {
+				offsetBuf = make([]byte, vptrSize)
+			} else {
+				offsetBuf = entry.Value[:vptrSize]
+			}
+			es = append(es, table.Entry{
+				Key: entry.Key,
+				Value: y.ValueStruct{
+					Value:    ptrs[i].Encode(offsetBuf),
 					Meta:     entry.meta | bitValuePointer,
 					UserMeta: entry.UserMeta,
-				})
+					Version:  y.ParseTs(entry.Key),
+				},
+			})
 		}
 	}
+	w.mt.PutToPendingList(es)
+	w.mergeLSMCh <- w.mt
 	return nil
 }
