@@ -18,13 +18,15 @@ package badger
 
 import (
 	"fmt"
-	"github.com/coocood/badger/options"
-	"golang.org/x/time/rate"
 	"math"
 	"math/rand"
 	"os"
 	"sort"
+	"sync"
 	"time"
+
+	"github.com/coocood/badger/options"
+	"golang.org/x/time/rate"
 
 	"github.com/coocood/badger/protos"
 	"github.com/coocood/badger/table"
@@ -291,7 +293,7 @@ func (ds *DiscardStats) collect(vs y.ValueStruct) {
 }
 
 // compactBuildTables merge topTables and botTables to form a list of new tables.
-func (s *levelsController) compactBuildTables(level int, cd compactDef, limiter *rate.Limiter) ([]*table.Table, func() error, error) {
+func (s *levelsController) compactBuildTables(level int, cd compactDef, limiter *rate.Limiter, start, end []byte) ([]*table.Table, error) {
 	topTables := cd.top
 	botTables := cd.bot
 
@@ -329,7 +331,10 @@ func (s *levelsController) compactBuildTables(level int, cd compactDef, limiter 
 	var firstErr error
 	var builder *table.Builder
 
-	for it.Valid() {
+	if start != nil {
+		it.Seek(start)
+	}
+	for ; it.Valid() && (end == nil || y.CompareKeys(it.Key(), end) < 0); {
 		timeStart := time.Now()
 		fileID := s.reserveFileID()
 		fd, err := y.CreateSyncedFile(table.NewFilename(fileID, s.kv.opt.Dir), false)
@@ -344,7 +349,7 @@ func (s *levelsController) compactBuildTables(level int, cd compactDef, limiter 
 		}
 
 		var numKeys uint64
-		for ; it.Valid(); it.Next() {
+		for ; it.Valid() && (end == nil || y.CompareKeys(it.Key(), end) < 0); it.Next() {
 			// See if we need to skip this key.
 			if len(skipKey) > 0 {
 				if y.SameKey(it.Key(), skipKey) {
@@ -428,7 +433,7 @@ func (s *levelsController) compactBuildTables(level int, cd compactDef, limiter 
 			tbl.DecrRef()
 		}
 		errorReturn := errors.Wrapf(firstErr, "While running compaction for: %+v", cd)
-		return nil, nil, errorReturn
+		return nil, errorReturn
 	}
 
 	sort.Slice(newTables, func(i, j int) bool {
@@ -436,7 +441,7 @@ func (s *levelsController) compactBuildTables(level int, cd compactDef, limiter 
 	})
 	s.kv.vlog.updateGCStats(discardStats.discardSpaces)
 	log.Infof("Discard stats: %v", discardStats)
-	return newTables, func() error { return decrRefs(newTables) }, nil
+	return newTables, nil
 }
 
 func buildChangeSet(cd *compactDef, newTables []*table.Table) protos.ManifestChangeSet {
@@ -474,6 +479,47 @@ func (cd *compactDef) lockLevels() {
 func (cd *compactDef) unlockLevels() {
 	cd.nextLevel.RUnlock()
 	cd.thisLevel.RUnlock()
+}
+
+type rangeWithSize struct {
+	start []byte
+	end   []byte
+	sz    int
+}
+
+func (cd *compactDef) getInputBounds() []rangeWithSize {
+	bounds := make([][]byte, 0, len(cd.bot)+1)
+	for _, tbl := range cd.bot {
+		smallest := y.KeyWithTs(y.ParseKey(tbl.Smallest()), math.MaxUint64)
+		bounds = append(bounds, smallest)
+	}
+	biggest := y.KeyWithTs(y.ParseKey(cd.bot[len(cd.bot)-1].Biggest()), 0)
+	bounds = append(bounds, biggest)
+
+	ranges := make([]rangeWithSize, 0, len(bounds))
+	for i := 0; i < len(bounds)-1; i++ {
+		start, end := bounds[i], bounds[i+1]
+		sz := cd.sizeInRange(cd.top, cd.thisLevel.level, start, end)
+		sz += cd.sizeInRange(cd.bot, cd.nextLevel.level, start, end)
+		ranges = append(ranges, rangeWithSize{start: start, end: end, sz: sz})
+	}
+
+	ranges[0].start = nil
+	ranges[len(ranges)-1].end = nil
+
+	return ranges
+}
+
+func (cd *compactDef) sizeInRange(tbls []*table.Table, level int, start, end []byte) int {
+	var sz int
+	left, right := 0, len(tbls)
+	if level != 0 {
+		left, right = getTablesInRange(tbls, start, end)
+	}
+	for _, tbl := range tbls[left:right] {
+		sz += tbl.ApproximateSizeInRange(start, end)
+	}
+	return sz
 }
 
 func (s *levelsController) fillTablesL0(cd *compactDef) bool {
@@ -560,7 +606,95 @@ func (s *levelsController) fillTables(cd *compactDef) bool {
 	return false
 }
 
-func (s *levelsController) runCompactDef(l int, cd compactDef, limiter *rate.Limiter) (err error) {
+// determineSubCompactPlan returns the number of sub compactors and the estimated size of each compaction job.
+func (s *levelsController) determineSubCompactPlan(bounds []rangeWithSize) (int, int) {
+	n := s.kv.opt.MaxSubCompaction
+	if len(bounds) < n {
+		n = len(bounds)
+	}
+
+	var size int
+	for _, bound := range bounds {
+		size += bound.sz
+	}
+
+	const minFileFillPercent = 4.0 / 5.0
+	maxOutPutFiles := int(math.Ceil(float64(size) / minFileFillPercent / float64(s.kv.opt.MaxTableSize)))
+	if maxOutPutFiles < n {
+		n = maxOutPutFiles
+	}
+	return n, size / n
+}
+
+func (s *levelsController) runSubCompacts(l int, cd compactDef, limiter *rate.Limiter) ([]*table.Table, error) {
+	type jobResult struct {
+		tbls []*table.Table
+		err  error
+	}
+
+	inputBounds := cd.getInputBounds()
+	numSubCompact, avgSize := s.determineSubCompactPlan(inputBounds)
+	if numSubCompact == 1 {
+		return s.compactBuildTables(l, cd, limiter, nil, nil)
+	}
+
+	results := make([]jobResult, numSubCompact)
+	var wg sync.WaitGroup
+	var currSize, begin, jobNo int
+
+	for i := range inputBounds {
+		currSize += inputBounds[i].sz
+		if currSize >= avgSize || i == len(inputBounds)-1 {
+			start, end := inputBounds[begin].start, inputBounds[i].end
+
+			wg.Add(1)
+			go func(job int) {
+				newTables, err := s.compactBuildTables(l, cd, limiter, start, end)
+				results[job].tbls = newTables
+				results[job].err = err
+				wg.Done()
+			}(jobNo)
+
+			currSize = 0
+			begin = i + 1
+			jobNo++
+		}
+	}
+
+	log.Infof("Started %d SubCompaction Jobs", jobNo)
+	wg.Wait()
+
+	var numTables int
+	for _, result := range results {
+		if result.err != nil {
+			return nil, result.err
+		}
+		numTables += len(result.tbls)
+	}
+
+	newTables := make([]*table.Table, 0, numTables)
+	for _, result := range results {
+		newTables = append(newTables, result.tbls...)
+	}
+
+	return newTables, nil
+}
+
+func (s *levelsController) shouldStartSubCompaction(cd compactDef) bool {
+	if s.kv.opt.MaxSubCompaction <= 1 || len(cd.bot) == 0 {
+		return false
+	}
+	if cd.thisLevel.level == 0 {
+		return true
+	}
+	if cd.thisLevel.level == 1 {
+		// Only speed up large L1 compaction.
+		return len(cd.bot)+len(cd.top) >= 10
+	}
+	return false
+}
+
+func (s *levelsController) runCompactDef(l int, cd compactDef, limiter *rate.Limiter) error {
 	timeStart := time.Now()
 
 	thisLevel := cd.thisLevel
@@ -569,13 +703,19 @@ func (s *levelsController) runCompactDef(l int, cd compactDef, limiter *rate.Lim
 	// Table should never be moved directly between levels, always be rewritten to allow discarding
 	// invalid versions.
 
-	newTables, decr, err := s.compactBuildTables(l, cd, limiter)
+	var newTables []*table.Table
+	var err error
+	if s.shouldStartSubCompaction(cd) {
+		newTables, err = s.runSubCompacts(l, cd, limiter)
+	} else {
+		newTables, err = s.compactBuildTables(l, cd, limiter, nil, nil)
+	}
 	if err != nil {
 		return err
 	}
 	defer func() {
 		// Only assign to err, if it's not already nil.
-		if decErr := decr(); err == nil {
+		if decErr := decrRefs(newTables); err == nil {
 			err = decErr
 		}
 	}()
