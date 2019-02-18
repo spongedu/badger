@@ -34,8 +34,8 @@ var (
 	NumWrites *expvar.Int
 	// NumBytesRead has cumulative number of bytes read
 	NumBytesRead *expvar.Int
-	// NumBytesWritten has cumulative number of bytes written
-	NumBytesWritten *expvar.Int
+	// NumVLogBytesWritten has cumulative number of bytes written
+	NumVLogBytesWritten *expvar.Int
 	// NumLSMGets is number of LMS gets
 	NumLSMGets *expvar.Map
 	// NumLSMBloomHits is number of LMS bloom hits
@@ -48,6 +48,8 @@ var (
 	NumBlockedPuts *expvar.Int
 	// NumMemtableGets is number of memtable gets
 	NumMemtableGets *expvar.Int
+	//TotalFileWriteSize *expvar.Int
+	TotalFileWriteSize *expvar.Int
 )
 
 // These variables are global and have cumulative values for all kv stores.
@@ -55,12 +57,13 @@ func init() {
 	NumReads = expvar.NewInt("badger_disk_reads_total")
 	NumWrites = expvar.NewInt("badger_disk_writes_total")
 	NumBytesRead = expvar.NewInt("badger_read_bytes")
-	NumBytesWritten = expvar.NewInt("badger_written_bytes")
+	NumVLogBytesWritten = expvar.NewInt("badger_value_log_written_bytes")
 	NumLSMGets = expvar.NewMap("badger_lsm_level_gets_total")
 	NumLSMBloomHits = expvar.NewMap("badger_lsm_bloom_hits_total")
 	NumGets = expvar.NewInt("badger_gets_total")
 	NumPuts = expvar.NewInt("badger_puts_total")
 	NumBlockedPuts = expvar.NewInt("badger_blocked_puts_total")
+	TotalFileWriteSize = expvar.NewInt("badger_write_file_total_bytes")
 	NumMemtableGets = expvar.NewInt("badger_memtable_gets_total")
 	LSMSize = expvar.NewMap("badger_lsm_size_bytes")
 	VlogSize = expvar.NewMap("badger_vlog_size_bytes")
