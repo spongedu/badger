@@ -345,11 +345,8 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 	}
 
 	seek := y.KeyWithTs(key, txn.readTs)
-	vs, err := txn.db.get(seek)
-	if err != nil {
-		return nil, errors.Wrapf(err, "DB::Get key: %q", key)
-	}
-	if vs.Value == nil && vs.Meta == 0 {
+	vs := txn.db.get(seek)
+	if !vs.Valid() {
 		return nil, ErrKeyNotFound
 	}
 	if isDeleted(vs.Meta) {
@@ -364,6 +361,46 @@ func (txn *Txn) Get(key []byte) (item *Item, rerr error) {
 	item.vptr = vs.Value
 	item.txn = txn
 	return item, nil
+}
+
+type keyValuePair struct {
+	key   []byte
+	val   y.ValueStruct
+	found bool
+}
+
+// MultiGet gets items for keys, if not found, the corresponding item will be nil.
+// It only supports read-only transaction for simplicity.
+func (txn *Txn) MultiGet(keys [][]byte) (items []*Item, err error) {
+	if txn.update {
+		return nil, errors.New("not supported")
+	}
+	if txn.discarded {
+		return nil, ErrDiscardedTxn
+	}
+	keyValuePairs := make([]keyValuePair, len(keys))
+	for i, key := range keys {
+		if len(key) == 0 {
+			return nil, ErrEmptyKey
+		}
+		keyValuePairs[i].key = y.KeyWithTs(key, txn.readTs)
+	}
+	txn.db.multiGet(keyValuePairs)
+	items = make([]*Item, len(keys))
+	for i, pair := range keyValuePairs {
+		if pair.found {
+			items[i] = &Item{
+				key:      keys[i],
+				version:  pair.val.Version,
+				meta:     pair.val.Meta,
+				userMeta: pair.val.UserMeta,
+				db:       txn.db,
+				vptr:     pair.val.Value,
+				txn:      txn,
+			}
+		}
+	}
+	return items, nil
 }
 
 // Discard discards a created transaction. This method is very important and must be called. Commit

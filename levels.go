@@ -849,23 +849,25 @@ func (s *levelsController) close() error {
 }
 
 // get returns the found value if any. If not found, we return nil.
-func (s *levelsController) get(key []byte) (y.ValueStruct, error) {
+func (s *levelsController) get(key []byte) y.ValueStruct {
 	// It's important that we iterate the levels from 0 on upward.  The reason is, if we iterated
 	// in opposite order, or in parallel (naively calling all the h.RLock() in some order) we could
 	// read level L's tables post-compaction and level L+1's tables pre-compaction.  (If we do
 	// parallelize this, we will need to call the h.RLock() function by increasing order of level
 	// number.)
 	for _, h := range s.levels {
-		vs, err := h.get(key) // Calls h.RLock() and h.RUnlock().
-		if err != nil {
-			return y.ValueStruct{}, errors.Wrapf(err, "get key: %q", key)
+		vs := h.get(key) // Calls h.RLock() and h.RUnlock().
+		if vs.Valid() {
+			return vs
 		}
-		if vs.Value == nil && vs.Meta == 0 {
-			continue
-		}
-		return vs, nil
 	}
-	return y.ValueStruct{}, nil
+	return y.ValueStruct{}
+}
+
+func (s *levelsController) multiGet(pairs []keyValuePair) {
+	for _, h := range s.levels {
+		h.multiGet(pairs)
+	}
 }
 
 func appendIteratorsReversed(out []y.Iterator, th []*table.Table, reversed bool) []y.Iterator {

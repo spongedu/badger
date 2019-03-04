@@ -292,10 +292,7 @@ func Open(opt Options) (db *DB, err error) {
 
 	headKey := y.KeyWithTs(head, math.MaxUint64)
 	// Need to pass with timestamp, lsm get removes the last 8 bytes and compares key
-	vs, err := db.get(headKey)
-	if err != nil {
-		return nil, errors.Wrap(err, "Retrieving head")
-	}
+	vs := db.get(headKey)
 	db.orc.curRead = vs.Version
 	var vptr valuePointer
 	if len(vs.Value) > 0 {
@@ -483,7 +480,7 @@ func (db *DB) getMemTables() []*table.MemTable {
 // tables and find the max version among them.  To maintain this invariant, we also need to ensure
 // that all versions of a key are always present in the same table from level 1, because compaction
 // can push any table down.
-func (db *DB) get(key []byte) (y.ValueStruct, error) {
+func (db *DB) get(key []byte) y.ValueStruct {
 	tables := db.getMemTables() // Lock should be released.
 	defer func() {
 		for _, tbl := range tables {
@@ -492,14 +489,44 @@ func (db *DB) get(key []byte) (y.ValueStruct, error) {
 	}()
 
 	y.NumGets.Add(1)
-	for i := 0; i < len(tables); i++ {
-		vs := tables[i].Get(key)
+	for _, table := range tables {
+		vs := table.Get(key)
 		y.NumMemtableGets.Add(1)
-		if vs.Meta != 0 || vs.Value != nil {
-			return vs, nil
+		if vs.Valid() {
+			return vs
 		}
 	}
 	return db.lc.get(key)
+}
+
+func (db *DB) multiGet(pairs []keyValuePair) {
+	tables := db.getMemTables() // Lock should be released.
+	defer func() {
+		for _, tbl := range tables {
+			tbl.DecrRef()
+		}
+	}()
+	y.NumGets.Add(int64(len(pairs)))
+	var foundCount int
+	for _, table := range tables {
+		for j := range pairs {
+			pair := &pairs[j]
+			if pair.found {
+				continue
+			}
+			val := table.Get(pair.key)
+			y.NumMemtableGets.Add(1)
+			if val.Valid() {
+				pair.val = val
+				pair.found = true
+				foundCount++
+			}
+		}
+	}
+	if foundCount == len(pairs) {
+		return
+	}
+	db.lc.multiGet(pairs)
 }
 
 func (db *DB) updateOffset(ptrs []valuePointer) {
@@ -804,10 +831,7 @@ func (db *DB) RunValueLogGC(discardRatio float64) error {
 	// Find head on disk
 	headKey := y.KeyWithTs(head, math.MaxUint64)
 	// Need to pass with timestamp, lsm get removes the last 8 bytes and compares key
-	vs, err := db.lc.get(headKey)
-	if err != nil {
-		return errors.Wrap(err, "Retrieving head from on-disk LSM")
-	}
+	vs := db.lc.get(headKey)
 
 	var head valuePointer
 	if len(vs.Value) > 0 {

@@ -366,8 +366,7 @@ func TestGetMore(t *testing.T) {
 			got := string(getItemValue(t, item))
 			if expectedValue != got {
 
-				vs, err := db.get(y.KeyWithTs(k, math.MaxUint64))
-				require.NoError(t, err)
+				vs := db.get(y.KeyWithTs(k, math.MaxUint64))
 				fmt.Printf("wanted=%q Item: %s\n", k, item)
 				fmt.Printf("on re-run, got version: %+v\n", vs)
 
@@ -386,6 +385,24 @@ func TestGetMore(t *testing.T) {
 			require.EqualValues(t, expectedValue, string(getItemValue(t, item)), "wanted=%q Item: %s\n", k, item)
 			txn.Discard()
 		}
+
+		// MultiGet
+		var multiGetKeys [][]byte
+		var expectedValues []string
+		for i := 0; i < n; i += 100 {
+			multiGetKeys = append(multiGetKeys, data(i))
+			// Set a long value to make sure we have enough sst tables.
+			expectedValues = append(expectedValues, fmt.Sprintf("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz%9d", i))
+		}
+		txn1 := db.NewTransaction(false)
+		items, err := txn1.MultiGet(multiGetKeys)
+		require.NoError(t, err)
+		for i, item := range items {
+			val, err1 := item.Value()
+			require.NoError(t, err1)
+			require.Equal(t, expectedValues[i], string(val))
+		}
+		txn1.Discard()
 
 		// "Delete" key.
 		for i := 0; i < n; i += m {
