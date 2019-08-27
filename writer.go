@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/coocood/badger/fileutil"
 	"github.com/coocood/badger/table"
 	"github.com/coocood/badger/y"
 	"github.com/ngaut/log"
@@ -30,19 +31,52 @@ type writeWorker struct {
 	*DB
 	writeLSMCh chan []*request
 	mergeLSMCh chan *table.MemTable
+	flushCh    chan flushLogTask
+}
+
+type flushLogTask struct {
+	writer *fileutil.BufferedFileWriter
+	reqs   []*request
 }
 
 func startWriteWorker(db *DB) *y.Closer {
-	closer := y.NewCloser(3)
+	numWorkers := 3
+	if db.opt.SyncWrites {
+		numWorkers += 1
+	}
+	closer := y.NewCloser(numWorkers)
 	w := &writeWorker{
 		DB:         db,
 		writeLSMCh: make(chan []*request, 1),
 		mergeLSMCh: make(chan *table.MemTable, 1),
+		flushCh:    make(chan flushLogTask),
+	}
+	if db.opt.SyncWrites {
+		go w.runFlusher(closer)
 	}
 	go w.runWriteVLog(closer)
 	go w.runWriteLSM(closer)
 	go w.runMergeLSM(closer)
 	return closer
+}
+
+func (w *writeWorker) runFlusher(lc *y.Closer) {
+	defer lc.Done()
+	for {
+		select {
+		case t := <-w.flushCh:
+			start := time.Now()
+			err := t.writer.Sync()
+			w.metrics.VlogSyncDuration.Observe(time.Since(start).Seconds())
+			if err != nil {
+				w.done(t.reqs, err)
+				continue
+			}
+			w.writeLSMCh <- t.reqs
+		case <-lc.HasBeenClosed():
+			return
+		}
+	}
 }
 
 func (w *writeWorker) runWriteVLog(lc *y.Closer) {
@@ -66,7 +100,14 @@ func (w *writeWorker) runWriteVLog(lc *y.Closer) {
 			w.done(reqs, err)
 			return
 		}
-		w.writeLSMCh <- reqs
+		if w.opt.SyncWrites {
+			w.flushCh <- flushLogTask{
+				writer: w.vlog.curWriter,
+				reqs:   reqs,
+			}
+		} else {
+			w.writeLSMCh <- reqs
+		}
 	}
 }
 
@@ -102,7 +143,11 @@ func (w *writeWorker) closeWriteVLog() {
 	if err != nil {
 		w.done(reqs, err)
 	} else {
-		w.writeLSMCh <- reqs
+		if err := w.vlog.curWriter.Sync(); err != nil {
+			w.done(reqs, err)
+		} else {
+			w.writeLSMCh <- reqs
+		}
 	}
 	close(w.writeLSMCh)
 }
