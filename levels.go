@@ -281,6 +281,7 @@ type DiscardStats struct {
 	// discard spaces for each files
 	discardSpaces map[uint32]int64 // file ID and summary of discard length
 	numSkips      int64
+	skippedBytes  int64
 }
 
 func (ds *DiscardStats) collect(vs y.ValueStruct) {
@@ -288,6 +289,7 @@ func (ds *DiscardStats) collect(vs y.ValueStruct) {
 		var vp valuePointer
 		vp.Decode(vs.Value)
 		ds.discardSpaces[vp.Fid] += int64(vp.Len)
+		ds.skippedBytes += int64(vs.EncodedSize())
 	}
 	ds.numSkips++
 }
@@ -338,6 +340,7 @@ func (lc *levelsController) compactBuildTables(level int, cd compactDef, limiter
 	if start != nil {
 		it.Seek(start)
 	}
+	var bytesRead, bytesWrite, numRead, numWrite int
 	for it.Valid() && (end == nil || y.CompareKeysWithVer(it.Key(), end) < 0) {
 		timeStart := time.Now()
 		fileID := lc.reserveFileID()
@@ -353,10 +356,12 @@ func (lc *levelsController) compactBuildTables(level int, cd compactDef, limiter
 			builder.Reset(fd)
 		}
 
-		var numKeys uint64
 		for ; it.Valid() && (end == nil || y.CompareKeysWithVer(it.Key(), end) < 0); it.Next() {
+			numRead++
 			vs := it.Value()
 			key := it.Key()
+			kvSize := int(vs.EncodedSize()) + len(key)
+			bytesRead += kvSize
 			// See if we need to skip this key.
 			if len(skipKey) > 0 {
 				if y.SameKey(key, skipKey) {
@@ -408,12 +413,12 @@ func (lc *levelsController) compactBuildTables(level int, cd compactDef, limiter
 					}
 				}
 			}
-			numKeys++
 			builder.Add(key, vs)
+			numWrite++
+			bytesWrite += kvSize
 		}
 		// It was true that it.Valid() at least once in the loop above, which means we
 		// called Add() at least once, and builder is not Empty().
-		log.Infof("Added %d keys. Skipped %d keys.", numKeys, discardStats.numSkips)
 		log.Infof("LOG Compact. Iteration took: %v\n", time.Since(timeStart))
 		if err := builder.Finish(); err != nil {
 			firstErr = err
@@ -435,6 +440,16 @@ func (lc *levelsController) compactBuildTables(level int, cd compactDef, limiter
 			newTables = append(newTables, tbl)
 		}
 	}
+
+	stats := &y.CompactionStats{
+		KeysRead:     numRead,
+		BytesRead:    bytesRead,
+		KeysWrite:    numWrite,
+		BytesWrite:   bytesWrite,
+		KeysDiscard:  int(discardStats.numSkips),
+		BytesDiscard: int(discardStats.skippedBytes),
+	}
+	lc.kv.metrics.UpdateCompactionStats(cd.nextLevel.strLevel, stats)
 
 	if firstErr == nil {
 		// Ensure created files' directory entries are visible.  We don't mind the extra latency

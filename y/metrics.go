@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	namespace = "badger"
-	label     = "path"
+	namespace  = "badger"
+	labelPath  = "path"
+	labelLevel = "target_level"
 )
 
 var (
@@ -30,12 +31,12 @@ var (
 	LSMSize = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
 		Name:      "lsm_size",
-	}, []string{label})
+	}, []string{labelPath})
 	// VlogSize has size of the value log in bytes
 	VlogSize = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
 		Name:      "vlog_size",
-	}, []string{label})
+	}, []string{labelPath})
 
 	// These are cumulative
 
@@ -43,47 +44,80 @@ var (
 	NumReads = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "num_reads",
-	}, []string{label})
+	}, []string{labelPath})
 	// NumWrites has cumulative number of writes
 	NumWrites = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "num_writes",
-	}, []string{label})
+	}, []string{labelPath})
 	// NumBytesRead has cumulative number of bytes read
 	NumBytesRead = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "num_bytes_read",
-	}, []string{label})
+	}, []string{labelPath})
 	// NumVLogBytesWritten has cumulative number of bytes written
 	NumVLogBytesWritten = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "num_bytes_written",
-	}, []string{label})
+	}, []string{labelPath})
 	// NumLSMGets is number of LMS gets
 	NumLSMGets = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "num_lsm_gets",
-	}, []string{label})
+	}, []string{labelPath})
 	// NumLSMBloomHits is number of LMS bloom hits
 	NumLSMBloomHits = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "num_lsm_bloom_hits",
-	}, []string{label})
+	}, []string{labelPath})
 	// NumGets is number of gets
 	NumGets = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "num_gets",
-	}, []string{label})
+	}, []string{labelPath})
 	// NumPuts is number of puts
 	NumPuts = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "num_puts",
-	}, []string{label})
+	}, []string{labelPath})
 	// NumMemtableGets is number of memtable gets
 	NumMemtableGets = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "num_memtable_gets",
-	}, []string{label})
+	}, []string{labelPath})
+
+	// Level statistics
+
+	// NumCompactionBytesWrite has cumulative size of keys read during compaction.
+	NumCompactionBytesWrite = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "num_compaction_bytes_write",
+	}, []string{labelPath, labelLevel})
+	// NumCompactionBytesRead has cumulative size of keys write during compaction.
+	NumCompactionBytesRead = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "num_compaction_bytes_read",
+	}, []string{labelPath, labelLevel})
+	// NumCompactionBytesRead has cumulative size of discarded keys after compaction.
+	NumCompactionBytesDiscard = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "num_compaction_bytes_discard",
+	}, []string{labelPath, labelLevel})
+	// NumCompactionKeysWrite has cumulative count of keys write during compaction.
+	NumCompactionKeysWrite = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "num_compaction_keys_write",
+	}, []string{labelPath, labelLevel})
+	// NumCompactionKeysRead has cumulative count of keys read during compaction.
+	NumCompactionKeysRead = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "num_compaction_keys_read",
+	}, []string{labelPath, labelLevel})
+	// NumCompactionKeysDiscard has cumulative count of discarded keys after compaction.
+	NumCompactionKeysDiscard = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "num_compaction_keys_discard",
+	}, []string{labelPath, labelLevel})
 
 	// Histograms
 
@@ -91,16 +125,17 @@ var (
 		Namespace: namespace,
 		Name:      "vlog_sync_duration",
 		Buckets:   prometheus.ExponentialBuckets(0.001, 1.5, 20),
-	}, []string{label})
+	}, []string{labelPath})
 
 	WriteLSMDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
 		Name:      "write_lsm_duration",
 		Buckets:   prometheus.ExponentialBuckets(0.0003, 1.5, 20),
-	}, []string{label})
+	}, []string{labelPath})
 )
 
 type MetricsSet struct {
+	path                string
 	LSMSize             prometheus.Gauge
 	VlogSize            prometheus.Gauge
 	NumReads            prometheus.Counter
@@ -118,6 +153,7 @@ type MetricsSet struct {
 
 func NewMetricSet(path string) *MetricsSet {
 	return &MetricsSet{
+		path:                path,
 		LSMSize:             LSMSize.WithLabelValues(path),
 		VlogSize:            VlogSize.WithLabelValues(path),
 		NumReads:            NumReads.WithLabelValues(path),
@@ -132,6 +168,26 @@ func NewMetricSet(path string) *MetricsSet {
 		VlogSyncDuration:    VlogSyncDuration.WithLabelValues(path),
 		WriteLSMDuration:    WriteLSMDuration.WithLabelValues(path),
 	}
+}
+
+type CompactionStats struct {
+	KeysRead     int
+	BytesRead    int
+	KeysWrite    int
+	BytesWrite   int
+	KeysDiscard  int
+	BytesDiscard int
+}
+
+func (m *MetricsSet) UpdateCompactionStats(targetLevel string, stats *CompactionStats) {
+	NumCompactionKeysRead.WithLabelValues(m.path, targetLevel).Add(float64(stats.KeysRead))
+	NumCompactionBytesRead.WithLabelValues(m.path, targetLevel).Add(float64(stats.BytesRead))
+
+	NumCompactionKeysWrite.WithLabelValues(m.path, targetLevel).Add(float64(stats.KeysWrite))
+	NumCompactionBytesWrite.WithLabelValues(m.path, targetLevel).Add(float64(stats.BytesWrite))
+
+	NumCompactionKeysDiscard.WithLabelValues(m.path, targetLevel).Add(float64(stats.KeysDiscard))
+	NumCompactionBytesDiscard.WithLabelValues(m.path, targetLevel).Add(float64(stats.BytesDiscard))
 }
 
 // These variables are global and have cumulative values for all kv stores.
@@ -149,4 +205,10 @@ func init() {
 	prometheus.MustRegister(NumMemtableGets)
 	prometheus.MustRegister(VlogSyncDuration)
 	prometheus.MustRegister(WriteLSMDuration)
+	prometheus.MustRegister(NumCompactionBytesWrite)
+	prometheus.MustRegister(NumCompactionBytesRead)
+	prometheus.MustRegister(NumCompactionBytesDiscard)
+	prometheus.MustRegister(NumCompactionKeysRead)
+	prometheus.MustRegister(NumCompactionKeysWrite)
+	prometheus.MustRegister(NumCompactionKeysDiscard)
 }
