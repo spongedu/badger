@@ -107,7 +107,7 @@ type Options struct {
 
 	ValueLogWriteOptions options.ValueLogWriterOptions
 
-	CompactionFilterFactory func() CompactionFilter
+	CompactionFilterFactory func(targetLevel int, smallest, biggest []byte) CompactionFilter
 }
 
 // CompactionFilter is an interface that user can implement to remove certain keys.
@@ -115,6 +115,19 @@ type CompactionFilter interface {
 	// Filter is the method the compaction process invokes for kv that is being compacted. The returned decision
 	// indicates that the kv should be preserved, deleted or dropped in the output of this compaction run.
 	Filter(key, val, userMeta []byte) Decision
+
+	// Guards returns specifications that may splits the SST files
+	// A key is associated to a guard that has the longest matched Prefix.
+	Guards() []Guard
+}
+
+// Guard specifies when to finish a SST file during compaction. The rule is the following:
+// 1. The key must match the Prefix of the Guard, otherwise the SST should finish.
+// 2. If the key up to MatchLen is the different than the previous key and MinSize is reached, the SST should finish.
+type Guard struct {
+	Prefix   []byte
+	MatchLen int
+	MinSize  int64
 }
 
 // Decision is the type for compaction filter decision.
