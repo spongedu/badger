@@ -331,6 +331,17 @@ func searchGuard(key []byte, guards []Guard) *Guard {
 	return maxMatchGuard
 }
 
+func overSkipTables(key []byte, skippedTables []*table.Table) (newSkippedTables []*table.Table, over bool) {
+	var i int
+	for i < len(skippedTables) {
+		t := skippedTables[i]
+		if y.CompareKeysWithVer(key, t.Biggest()) > 0 {
+			i++
+		}
+	}
+	return skippedTables[i:], i > 0
+}
+
 // compactBuildTables merge topTables and botTables to form a list of new tables.
 func (lc *levelsController) compactBuildTables(level int, cd compactDef,
 	limiter *rate.Limiter) (newTables []*table.Table, err error) {
@@ -371,6 +382,7 @@ func (lc *levelsController) compactBuildTables(level int, cd compactDef,
 		filter = lc.kv.opt.CompactionFilterFactory(level+1, cd.smallest(), cd.biggest())
 		guards = filter.Guards()
 	}
+	skippedTbls := cd.skippedTbls
 
 	var lastKey, skipKey []byte
 	var builder *table.Builder
@@ -410,6 +422,13 @@ func (lc *levelsController) compactBuildTables(level int, cd compactDef,
 				// Only break if we are on a different key, and have reached capacity. We want
 				// to ensure that all versions of the key are stored in the same sstable, and
 				// not divided across multiple tables at the same level.
+				if len(skippedTbls) > 0 {
+					var over bool
+					skippedTbls, over = overSkipTables(key, skippedTbls)
+					if over && !builder.Empty() {
+						break
+					}
+				}
 				if shouldFinishFile(key, lastKey, guard, int64(builder.EstimateSize()), lc.kv.opt.MaxTableSize) {
 					break
 				}
@@ -491,10 +510,7 @@ func (lc *levelsController) compactBuildTables(level int, cd compactDef,
 		log.Error(err)
 		return
 	}
-
-	sort.Slice(newTables, func(i, j int) bool {
-		return y.CompareKeysWithVer(newTables[i].Biggest(), newTables[j].Biggest()) < 0
-	})
+	sortTables(newTables)
 	lc.kv.vlog.updateGCStats(discardStats.discardSpaces)
 	log.Infof("Discard stats: %v", discardStats)
 	assertTablesOrder(newTables)
@@ -521,6 +537,8 @@ type compactDef struct {
 
 	top []*table.Table
 	bot []*table.Table
+
+	skippedTbls []*table.Table
 
 	thisRange keyRange
 	nextRange keyRange
@@ -610,8 +628,7 @@ func (lc *levelsController) fillTablesL0(cd *compactDef) bool {
 
 	kr := getKeyRange(cd.top)
 	left, right := cd.nextLevel.overlappingTables(levelHandlerRLocked{}, kr)
-	cd.bot = make([]*table.Table, right-left)
-	copy(cd.bot, cd.nextLevel.tables[left:right])
+	lc.fillBottomTables(cd, cd.nextLevel.tables[left:right])
 
 	if len(cd.bot) == 0 { // the bottom-most level
 		cd.nextRange = kr
@@ -624,6 +641,35 @@ func (lc *levelsController) fillTablesL0(cd *compactDef) bool {
 	}
 
 	return true
+}
+
+const minSkippedTableSize = 1024 * 1024
+
+func (lc *levelsController) fillBottomTables(cd *compactDef, overlappingTables []*table.Table) {
+	for _, t := range overlappingTables {
+		// If none of the top tables contains the range in an overlapping bottom table,
+		// we can skip it during compaction to reduce write amplification.
+		var added bool
+		for _, topTbl := range cd.top {
+			iter := topTbl.NewIteratorNoRef(false)
+			iter.Seek(t.Smallest())
+			if iter.Valid() && y.CompareKeysWithVer(iter.Key(), t.Biggest()) <= 0 {
+				cd.bot = append(cd.bot, t)
+				added = true
+				break
+			}
+		}
+		if !added {
+			if t.Size() >= minSkippedTableSize {
+				// We need to limit the minimum size of the table to be skipped,
+				// otherwise the number of tables in a level will keep growing
+				// until we meet too many open files error.
+				cd.skippedTbls = append(cd.skippedTbls, t)
+			} else {
+				cd.bot = append(cd.bot, t)
+			}
+		}
+	}
 }
 
 func (lc *levelsController) fillTables(cd *compactDef) bool {
@@ -656,9 +702,7 @@ func (lc *levelsController) fillTables(cd *compactDef) bool {
 		}
 		cd.top = []*table.Table{t}
 		left, right := cd.nextLevel.overlappingTables(levelHandlerRLocked{}, cd.thisRange)
-
-		cd.bot = make([]*table.Table, right-left)
-		copy(cd.bot, cd.nextLevel.tables[left:right])
+		lc.fillBottomTables(cd, cd.nextLevel.tables[left:right])
 
 		if len(cd.bot) == 0 {
 			cd.bot = []*table.Table{}
@@ -780,7 +824,7 @@ func (lc *levelsController) runCompactDef(l int, cd compactDef, limiter *rate.Li
 
 	var newTables []*table.Table
 	var changeSet protos.ManifestChangeSet
-	if l > 0 && len(cd.bot) == 0 {
+	if l > 0 && len(cd.bot) == 0 && len(cd.skippedTbls) == 0 {
 		// skip level 0, since it may has many table overlap with each other
 		newTables = cd.top
 		changeSet = protos.ManifestChangeSet{Changes: []*protos.ManifestChange{
@@ -803,7 +847,7 @@ func (lc *levelsController) runCompactDef(l int, cd compactDef, limiter *rate.Li
 
 	// See comment earlier in this function about the ordering of these ops, and the order in which
 	// we access levels when reading.
-	if err := nextLevel.replaceTables(newTables); err != nil {
+	if err := nextLevel.replaceTables(newTables, cd.skippedTbls); err != nil {
 		return err
 	}
 	if err := thisLevel.deleteTables(cd.top); err != nil {
