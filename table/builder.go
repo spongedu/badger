@@ -18,6 +18,7 @@ package table
 
 import (
 	"encoding/binary"
+	"math"
 	"os"
 	"reflect"
 	"unsafe"
@@ -72,17 +73,23 @@ type Builder struct {
 	entryEndOffsets []uint32
 
 	hashEntries []hashEntry
+	bloomFpr    float64
 	opt         options.TableBuilderOptions
 }
 
 // NewTableBuilder makes a new TableBuilder.
 // If the limiter is nil, the write speed during table build will not be limited.
-func NewTableBuilder(f *os.File, limiter *rate.Limiter, opt options.TableBuilderOptions) *Builder {
+func NewTableBuilder(f *os.File, limiter *rate.Limiter, level int, opt options.TableBuilderOptions) *Builder {
+	t := float64(opt.LevelSizeMultiplier)
+	fprBase := math.Pow(t, 1/(t-1)) * opt.LogicalBloomFPR * (t - 1)
+	levelFactor := math.Pow(t, float64(opt.MaxLevels-level))
+
 	return &Builder{
 		w:           fileutil.NewDirectWriter(f, opt.WriteBufferSize, limiter),
 		buf:         make([]byte, 0, 4*1024),
 		baseKeysBuf: make([]byte, 0, 4*1024),
 		hashEntries: make([]hashEntry, 0, 4*1024),
+		bloomFpr:    fprBase / levelFactor,
 		opt:         opt,
 	}
 }
@@ -215,7 +222,7 @@ func (b *Builder) Finish() error {
 	b.buf = append(b.buf, u32ToBytes(uint32(len(b.baseKeysEndOffs)))...)
 
 	// Write bloom filter.
-	bloomFilter := bbloom.New(float64(len(b.hashEntries)), 0.01)
+	bloomFilter := bbloom.New(float64(len(b.hashEntries)), b.bloomFpr)
 	for _, he := range b.hashEntries {
 		bloomFilter.Add(he.hash)
 	}

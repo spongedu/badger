@@ -38,9 +38,12 @@ func key(prefix string, i int) string {
 }
 
 var defaultBuilderOpt = options.TableBuilderOptions{
-	EnableHashIndex: true,
-	HashUtilRatio:   0.75,
-	WriteBufferSize: 1024 * 1024,
+	EnableHashIndex:     true,
+	HashUtilRatio:       0.75,
+	WriteBufferSize:     1024 * 1024,
+	MaxLevels:           7,
+	LevelSizeMultiplier: 10,
+	LogicalBloomFPR:     0.01,
 }
 
 func buildTestTable(t *testing.T, prefix string, n int) *os.File {
@@ -65,7 +68,7 @@ func buildTable(t *testing.T, keyValues [][]string) *os.File {
 	} else {
 		y.Check(err)
 	}
-	b := NewTableBuilder(f, rate.NewLimiter(rate.Inf, math.MaxInt32), defaultBuilderOpt)
+	b := NewTableBuilder(f, rate.NewLimiter(rate.Inf, math.MaxInt32), 0, defaultBuilderOpt)
 
 	sort.Slice(keyValues, func(i, j int) bool {
 		return keyValues[i][0] < keyValues[j][0]
@@ -115,7 +118,7 @@ func TestHashIndexTS(t *testing.T) {
 	} else {
 		y.Check(err)
 	}
-	b := NewTableBuilder(f, nil, defaultBuilderOpt)
+	b := NewTableBuilder(f, nil, 0, defaultBuilderOpt)
 	keys := [][]byte{
 		y.KeyWithTs([]byte("key"), 9),
 		y.KeyWithTs([]byte("key"), 7),
@@ -710,7 +713,7 @@ func BenchmarkRead(b *testing.B) {
 	filename := fmt.Sprintf("%s%s%d.sst", os.TempDir(), string(os.PathSeparator), rand.Int63())
 	f, err := y.OpenSyncedFile(filename, true)
 	y.Check(err)
-	builder := NewTableBuilder(f, nil, defaultBuilderOpt)
+	builder := NewTableBuilder(f, nil, 0, defaultBuilderOpt)
 	for i := 0; i < n; i++ {
 		k := fmt.Sprintf("%016x", i)
 		v := fmt.Sprintf("%d", i)
@@ -749,8 +752,10 @@ func BenchmarkBuildTable(b *testing.B) {
 			filename := fmt.Sprintf("%s%s%d.sst", os.TempDir(), string(os.PathSeparator), rand.Int63())
 			f, err := y.OpenSyncedFile(filename, false)
 			y.Check(err)
+			opt := defaultBuilderOpt
+			opt.EnableHashIndex = false
 			for bn := 0; bn < b.N; bn++ {
-				builder := NewTableBuilder(f, nil, options.TableBuilderOptions{EnableHashIndex: false})
+				builder := NewTableBuilder(f, nil, 0, opt)
 				for i := 0; i < n; i++ {
 					y.Check(builder.Add(kvs[i].k, y.ValueStruct{Value: kvs[i].v, Meta: 123, UserMeta: []byte{0}}))
 				}
@@ -765,7 +770,7 @@ func BenchmarkBuildTable(b *testing.B) {
 			f, err := y.OpenSyncedFile(filename, false)
 			y.Check(err)
 			for bn := 0; bn < b.N; bn++ {
-				builder := NewTableBuilder(f, nil, defaultBuilderOpt)
+				builder := NewTableBuilder(f, nil, 0, defaultBuilderOpt)
 				for i := 0; i < n; i++ {
 					y.Check(builder.Add(kvs[i].k, y.ValueStruct{Value: kvs[i].v, Meta: 123, UserMeta: []byte{0}}))
 				}
@@ -782,7 +787,7 @@ func BenchmarkPointGet(b *testing.B) {
 	for _, n := range ns {
 		filename := fmt.Sprintf("%s%s%d.sst", os.TempDir(), string(os.PathSeparator), rand.Int63())
 		f, err := y.OpenSyncedFile(filename, true)
-		builder := NewTableBuilder(f, nil, defaultBuilderOpt)
+		builder := NewTableBuilder(f, nil, 0, defaultBuilderOpt)
 		keys := make([][]byte, n)
 		y.Check(err)
 		for i := 0; i < n; i++ {
@@ -855,7 +860,7 @@ func BenchmarkReadAndBuild(b *testing.B) {
 	n := 5 << 20
 	filename := fmt.Sprintf("%s%s%d.sst", os.TempDir(), string(os.PathSeparator), rand.Int63())
 	f, err := y.OpenSyncedFile(filename, false)
-	builder := NewTableBuilder(f, nil, defaultBuilderOpt)
+	builder := NewTableBuilder(f, nil, 0, defaultBuilderOpt)
 	y.Check(err)
 	for i := 0; i < n; i++ {
 		k := fmt.Sprintf("%016x", i)
@@ -876,7 +881,7 @@ func BenchmarkReadAndBuild(b *testing.B) {
 	y.Check(err)
 	for i := 0; i < b.N; i++ {
 		func() {
-			newBuilder := NewTableBuilder(f, nil, options.TableBuilderOptions{})
+			newBuilder := NewTableBuilder(f, nil, 0, options.TableBuilderOptions{})
 			it := tbl.NewIterator(false)
 			defer it.Close()
 			for it.seekToFirst(); it.Valid(); it.next() {
@@ -900,7 +905,7 @@ func BenchmarkReadMerged(b *testing.B) {
 		filename := fmt.Sprintf("%s%s%d.sst", os.TempDir(), string(os.PathSeparator), rand.Int63())
 		f, err := y.OpenSyncedFile(filename, true)
 		y.Check(err)
-		builder := NewTableBuilder(f, nil, defaultBuilderOpt)
+		builder := NewTableBuilder(f, nil, 0, defaultBuilderOpt)
 		for j := 0; j < tableSize; j++ {
 			id := j*m + i // Arrays are interleaved.
 			// id := i*tableSize+j (not interleaved)
