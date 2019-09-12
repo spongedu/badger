@@ -18,11 +18,14 @@ package table
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 	"sort"
 
 	"github.com/coocood/badger/y"
 )
+
+var maxGlobalTs = [8]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
 
 type blockIterator struct {
 	data    []byte
@@ -30,8 +33,9 @@ type blockIterator struct {
 	err     error
 	baseKey []byte
 
-	key []byte
-	val []byte
+	globalTs [8]byte
+	key      []byte
+	val      []byte
 
 	lastBaseLen     uint16
 	entryEndOffsets []uint32
@@ -117,6 +121,9 @@ func (itr *blockIterator) setIdx(i int) {
 	valueOff := headerSize + int(h.diffLen)
 	diffKey := entryData[headerSize:valueOff]
 	itr.key = append(itr.key[:h.baseLen], diffKey...)
+	if itr.globalTs != maxGlobalTs {
+		itr.key = append(itr.key, itr.globalTs[:]...)
+	}
 	itr.val = entryData[valueOff:]
 }
 
@@ -143,12 +150,13 @@ type Iterator struct {
 // NewIterator returns a new iterator of the Table
 func (t *Table) NewIterator(reversed bool) *Iterator {
 	t.IncrRef() // Important.
-	ti := &Iterator{t: t, reversed: reversed}
-	return ti
+	return t.NewIteratorNoRef(reversed)
 }
 
 func (t *Table) NewIteratorNoRef(reversed bool) *Iterator {
-	return &Iterator{t: t, reversed: reversed}
+	it := &Iterator{t: t, reversed: reversed}
+	binary.BigEndian.PutUint64(it.bi.globalTs[:], t.globalTs)
+	return it
 }
 
 // Close closes the iterator (and it must be called).
@@ -416,7 +424,7 @@ func (s *ConcatIterator) setIdx(idx int) {
 	} else {
 		if s.iters[s.idx] == nil {
 			// We already increased table refs, so init without IncrRef here
-			ti := &Iterator{t: s.tables[s.idx], reversed: s.reversed}
+			ti := s.tables[s.idx].NewIteratorNoRef(s.reversed)
 			ti.next()
 			s.iters[s.idx] = ti
 		}
