@@ -243,6 +243,13 @@ func (itr *Iterator) seekBlock(key []byte) int {
 		}
 		baseKeyEndOff := itr.t.baseKeysEndOffs[idx]
 		baseKey := itr.t.baseKeys[baseKeyStartOff:baseKeyEndOff]
+		if itr.bi.globalTs != maxGlobalTs {
+			cmp := bytes.Compare(baseKey, y.ParseKey(key))
+			if cmp != 0 {
+				return cmp > 0
+			}
+			return bytes.Compare(itr.bi.globalTs[:], key[len(key)-8:]) > 0
+		}
 		return y.CompareKeysWithVer(baseKey, key) > 0
 	})
 }

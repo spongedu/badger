@@ -241,6 +241,27 @@ func (s *levelHandler) tryAddLevel0Table(t *table.Table) bool {
 	return true
 }
 
+func (s *levelHandler) addTable(t *table.Table) {
+	s.Lock()
+	defer s.Unlock()
+
+	s.totalSize += t.Size()
+	if s.level == 0 {
+		s.tables = append(s.tables, t)
+		return
+	}
+
+	i := sort.Search(len(s.tables), func(i int) bool {
+		return y.CompareKeysWithVer(s.tables[i].Smallest(), t.Biggest()) >= 0
+	})
+	if i == len(s.tables) {
+		s.tables = append(s.tables, t)
+	} else {
+		s.tables = append(s.tables[:i+1], s.tables[i:]...)
+		s.tables[i] = t
+	}
+}
+
 func (s *levelHandler) numTables() int {
 	s.RLock()
 	defer s.RUnlock()
