@@ -19,7 +19,6 @@ package badger
 import (
 	"bytes"
 	"fmt"
-	"math"
 	"math/rand"
 	"os"
 	"sort"
@@ -696,10 +695,8 @@ func (lc *levelsController) fillTables(cd *compactDef) bool {
 	for _, t := range tbls {
 		cd.thisSize = t.Size()
 		cd.thisRange = keyRange{
-			// We pick all the versions of the smallest and the biggest key.
-			left: y.KeyWithTs(y.ParseKey(t.Smallest()), math.MaxUint64),
-			// Note that version zero would be the rightmost key.
-			right: y.KeyWithTs(y.ParseKey(t.Biggest()), 0),
+			left:  t.Smallest(),
+			right: t.Biggest(),
 		}
 		if lc.cstatus.overlapsWith(cd.thisLevel.level, cd.thisRange) {
 			continue
@@ -848,13 +845,13 @@ func (lc *levelsController) runCompactDef(l int, cd compactDef, limiter *rate.Li
 	}
 
 	// We write to the manifest _before_ we delete files (and after we created files)
-	if err := lc.kv.manifest.addChanges(changeSet.Changes); err != nil {
+	if err := lc.kv.manifest.addChanges(changeSet.Changes, nil); err != nil {
 		return err
 	}
 
 	// See comment earlier in this function about the ordering of these ops, and the order in which
 	// we access levels when reading.
-	if err := nextLevel.replaceTables(newTables, cd.skippedTbls); err != nil {
+	if err := nextLevel.replaceTables(newTables, &cd); err != nil {
 		return err
 	}
 	if err := thisLevel.deleteTables(cd.top); err != nil {
@@ -907,14 +904,14 @@ func (lc *levelsController) doCompact(p compactionPriority) (bool, error) {
 	return true, nil
 }
 
-func (lc *levelsController) addLevel0Table(t *table.Table) error {
+func (lc *levelsController) addLevel0Table(t *table.Table, head *protos.HeadInfo) error {
 	// We update the manifest _before_ the table becomes part of a levelHandler, because at that
 	// point it could get used in some compaction.  This ensures the manifest file gets updated in
 	// the proper order. (That means this update happens before that of some compaction which
 	// deletes the table.)
 	err := lc.kv.manifest.addChanges([]*protos.ManifestChange{
 		makeTableCreateChange(t.ID(), 0),
-	})
+	}, head)
 	if err != nil {
 		return err
 	}
