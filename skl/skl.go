@@ -80,22 +80,11 @@ type node struct {
 type Skiplist struct {
 	height int32 // Current height. 1 <= height <= kMaxHeight. CAS.
 	head   *node
-	ref    int32
 	arena  *Arena
 }
 
-// IncrRef increases the refcount
-func (s *Skiplist) IncrRef() {
-	atomic.AddInt32(&s.ref, 1)
-}
-
 // DecrRef decrements the refcount, deallocating the Skiplist when done using it
-func (s *Skiplist) DecrRef() {
-	newRef := atomic.AddInt32(&s.ref, -1)
-	if newRef > 0 {
-		return
-	}
-
+func (s *Skiplist) Delete() {
 	s.arena.reset()
 	// Indicate we are closed. Good for testing.  Also, lets GC reclaim memory. Race condition
 	// here would suggest we are accessing skiplist when we are supposed to have no reference!
@@ -132,7 +121,6 @@ func NewSkiplist(arenaSize int64) *Skiplist {
 		height: 1,
 		head:   head,
 		arena:  arena,
-		ref:    1,
 	}
 }
 
@@ -453,7 +441,6 @@ func (s *Skiplist) Get(key []byte) y.ValueStruct {
 
 // NewIterator returns a skiplist iterator.  You have to Close() the iterator.
 func (s *Skiplist) NewIterator() *Iterator {
-	s.IncrRef()
 	return &Iterator{list: s}
 }
 
@@ -466,12 +453,6 @@ func (s *Skiplist) MemSize() int64 { return s.arena.size() }
 type Iterator struct {
 	list *Skiplist
 	n    *node
-}
-
-// Close frees the resources held by the iterator
-func (s *Iterator) Close() error {
-	s.list.DecrRef()
-	return nil
 }
 
 // Valid returns true iff the iterator is positioned at a valid node.
@@ -582,6 +563,3 @@ func (s *UniIterator) FillValue(vs *y.ValueStruct) { s.iter.FillValue(vs) }
 
 // Valid implements y.Interface
 func (s *UniIterator) Valid() bool { return s.iter.Valid() }
-
-// Close implements y.Interface (and frees up the iter's resources)
-func (s *UniIterator) Close() error { return s.iter.Close() }

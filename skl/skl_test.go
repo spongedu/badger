@@ -72,12 +72,6 @@ func TestEmpty(t *testing.T) {
 
 	it.Seek(key)
 	require.False(t, it.Valid())
-
-	l.DecrRef()
-	require.True(t, l.valid()) // Check the reference counting.
-
-	it.Close()
-	require.False(t, l.valid()) // Check the reference counting.
 }
 
 // TestBasic tests single-threaded inserts and updates and gets.
@@ -150,7 +144,7 @@ func TestConcurrentBasic(t *testing.T) {
 
 func TestFindNear(t *testing.T) {
 	l := NewSkiplist(arenaSize)
-	defer l.DecrRef()
+	defer l.Delete()
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("%05d", i*10+5)
 		l.Put(y.KeyWithTs([]byte(key), 0), y.ValueStruct{Value: newValue(i), Meta: 0, UserMeta: []byte{0}})
@@ -257,9 +251,8 @@ func TestFindNear(t *testing.T) {
 func TestIteratorNext(t *testing.T) {
 	const n = 100
 	l := NewSkiplist(arenaSize)
-	defer l.DecrRef()
+	defer l.Delete()
 	it := l.NewIterator()
-	defer it.Close()
 	require.False(t, it.Valid())
 	it.SeekToFirst()
 	require.False(t, it.Valid())
@@ -281,9 +274,8 @@ func TestIteratorNext(t *testing.T) {
 func TestIteratorPrev(t *testing.T) {
 	const n = 100
 	l := NewSkiplist(arenaSize)
-	defer l.DecrRef()
+	defer l.Delete()
 	it := l.NewIterator()
-	defer it.Close()
 	require.False(t, it.Valid())
 	it.SeekToFirst()
 	require.False(t, it.Valid())
@@ -305,10 +297,9 @@ func TestIteratorPrev(t *testing.T) {
 func TestIteratorSeek(t *testing.T) {
 	const n = 100
 	l := NewSkiplist(arenaSize)
-	defer l.DecrRef()
+	defer l.Delete()
 
 	it := l.NewIterator()
-	defer it.Close()
 
 	require.False(t, it.Valid())
 	it.SeekToFirst()
@@ -393,7 +384,7 @@ func TestPutWithHint(t *testing.T) {
 func TestPutLargeValue(t *testing.T) {
 	l := NewSkiplist(arenaSize)
 	key := randomKey()
-	val := make([]byte, 128 * 1024)
+	val := make([]byte, 128*1024)
 	l.Put(key, y.ValueStruct{Value: val})
 	result := l.Get(key)
 	require.Equal(t, val, result.Value)
@@ -416,7 +407,7 @@ func BenchmarkReadWrite(b *testing.B) {
 		readFrac := float32(i) / 10.0
 		b.Run(fmt.Sprintf("frac_%d", i), func(b *testing.B) {
 			l := NewSkiplist(int64((b.N + 1) * MaxNodeSize))
-			defer l.DecrRef()
+			defer l.Delete()
 			b.ResetTimer()
 			var count int
 			b.RunParallel(func(pb *testing.PB) {

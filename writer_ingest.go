@@ -3,6 +3,7 @@ package badger
 import (
 	"sync"
 
+	"github.com/coocood/badger/epoch"
 	"github.com/coocood/badger/protos"
 	"github.com/coocood/badger/table"
 	"github.com/coocood/badger/y"
@@ -61,8 +62,9 @@ func (w *writeWorker) prepareIngestTask(task *ingestTask) (ts uint64, wg *sync.W
 		return 0, nil, err
 	}
 
+	guard := w.resourceMgr.Acquire()
+	defer guard.Done()
 	it := w.mt.NewIterator(false)
-	defer it.Close()
 	for _, t := range task.tbls {
 		it.Seek(t.Smallest())
 		if it.Valid() && y.CompareKeysWithVer(it.Key(), y.KeyWithTs(t.Biggest(), 0)) <= 0 {
@@ -81,6 +83,8 @@ func (w *writeWorker) ingestTable(tbl *table.Table, splitHints [][]byte) error {
 		left:  tbl.Smallest(),
 		right: tbl.Biggest(),
 	}
+	ref := w.resourceMgr.Acquire()
+	defer ref.Done()
 
 	var (
 		targetLevel       int
@@ -120,7 +124,7 @@ func (w *writeWorker) ingestTable(tbl *table.Table, splitHints [][]byte) error {
 	defer l.remove(kr)
 
 	if targetLevel != 0 && len(overlappingTables) != 0 {
-		return w.runIngestCompact(targetLevel, tbl, overlappingTables, splitHints)
+		return w.runIngestCompact(targetLevel, tbl, overlappingTables, splitHints, ref)
 	}
 
 	change := makeTableCreateChange(tbl.ID(), targetLevel)
@@ -131,7 +135,7 @@ func (w *writeWorker) ingestTable(tbl *table.Table, splitHints [][]byte) error {
 	return nil
 }
 
-func (w *writeWorker) runIngestCompact(level int, tbl *table.Table, overlappingTables []*table.Table, splitHints [][]byte) error {
+func (w *writeWorker) runIngestCompact(level int, tbl *table.Table, overlappingTables []*table.Table, splitHints [][]byte, guard *epoch.Guard) error {
 	cd := compactDef{
 		nextLevel: w.lc.levels[level],
 		top:       []*table.Table{tbl},
@@ -142,7 +146,6 @@ func (w *writeWorker) runIngestCompact(level int, tbl *table.Table, overlappingT
 	if err != nil {
 		return err
 	}
-	defer forceDecrRefs(newTables)
 
 	var changes []*protos.ManifestChange
 	for _, t := range newTables {
@@ -155,7 +158,7 @@ func (w *writeWorker) runIngestCompact(level int, tbl *table.Table, overlappingT
 	if err := w.manifest.addChanges(changes, nil); err != nil {
 		return err
 	}
-	return cd.nextLevel.replaceTables(newTables, &cd)
+	return cd.nextLevel.replaceTables(newTables, &cd, guard)
 }
 
 func (w *writeWorker) overlapWithFlushingMemTables(kr keyRange) bool {
@@ -163,10 +166,8 @@ func (w *writeWorker) overlapWithFlushingMemTables(kr keyRange) bool {
 		it := mt.NewIterator(false)
 		it.Seek(kr.left)
 		if !it.Valid() || y.CompareKeysWithVer(it.Key(), kr.right) <= 0 {
-			it.Close()
 			return true
 		}
-		it.Close()
 	}
 	return false
 }
@@ -194,7 +195,7 @@ func (w *writeWorker) checkRangeInLevel(kr keyRange, level int) (overlappingTabl
 	}
 
 	for i := left; i < right; i++ {
-		it := handler.tables[i].NewIteratorNoRef(false)
+		it := handler.tables[i].NewIterator(false)
 		it.Seek(kr.left)
 		if it.Valid() && y.CompareKeysWithVer(it.Key(), kr.right) <= 0 {
 			overlap = true

@@ -199,7 +199,6 @@ func (opts *IteratorOptions) OverlapMemTable(t *table.MemTable) bool {
 		return true
 	}
 	iter := t.NewIterator(false)
-	defer iter.Close()
 	iter.Seek(opts.startKeyWithTS)
 	if !iter.Valid() {
 		return false
@@ -221,7 +220,6 @@ func (opts *IteratorOptions) OverlapTable(t *table.Table) bool {
 		return false
 	}
 	iter := t.NewIterator(false)
-	defer iter.Close()
 	iter.Seek(opts.startKeyWithTS)
 	if !iter.Valid() {
 		return false
@@ -288,11 +286,6 @@ func (txn *Txn) NewIterator(opt IteratorOptions) *Iterator {
 	atomic.AddInt32(&txn.numIterators, 1)
 
 	tables := txn.db.getMemTables()
-	defer func() {
-		for _, tbl := range tables {
-			tbl.DecrRef()
-		}
-	}()
 	if len(opt.StartKey) > 0 {
 		opt.startKeyWithTS = y.KeyWithTs(opt.StartKey, math.MaxUint64)
 	}
@@ -343,7 +336,6 @@ func (it *Iterator) ValidForPrefix(prefix []byte) bool {
 
 // Close would close the iterator. It is important to call this when you're done with iteration.
 func (it *Iterator) Close() {
-	it.iitr.Close()
 	atomic.AddInt32(&it.txn.numIterators, -1)
 }
 
