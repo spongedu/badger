@@ -459,7 +459,6 @@ func (lc *levelsController) compactBuildTables(level int, cd compactDef,
 				skipKey = y.SafeCopy(skipKey, key)
 
 				if isDeleted(vs.Meta) {
-					log.Errorf("discard key %v at %d", key, version)
 					// If this key range has overlap with lower levels, then keep the deletion
 					// marker with the latest version, discarding the rest. We have set skipKey,
 					// so the following key versions would be skipped. Otherwise discard the deletion marker.
@@ -586,6 +585,18 @@ func (cd *compactDef) biggest() []byte {
 		return cd.nextRange.right
 	}
 	return cd.thisRange.right
+}
+
+func (cd *compactDef) markTablesCompacting() {
+	for _, tbl := range cd.top {
+		tbl.MarkCompacting(true)
+	}
+	for _, tbl := range cd.bot {
+		tbl.MarkCompacting(true)
+	}
+	for _, tbl := range cd.skippedTbls {
+		tbl.MarkCompacting(true)
+	}
 }
 
 /*
@@ -845,6 +856,15 @@ func (lc *levelsController) runCompactDef(l int, cd compactDef, limiter *rate.Li
 	var newTables []*table.Table
 	var changeSet protos.ManifestChangeSet
 	var topMove bool
+	defer func() {
+		for _, tbl := range newTables {
+			tbl.MarkCompacting(false)
+		}
+		for _, tbl := range cd.skippedTbls {
+			tbl.MarkCompacting(false)
+		}
+	}()
+
 	if l > 0 && len(cd.bot) == 0 && len(cd.skippedTbls) == 0 {
 		// skip level 0, since it may has many table overlap with each other
 		newTables = cd.top
@@ -868,12 +888,8 @@ func (lc *levelsController) runCompactDef(l int, cd compactDef, limiter *rate.Li
 
 	// See comment earlier in this function about the ordering of these ops, and the order in which
 	// we access levels when reading.
-	if err := nextLevel.replaceTables(newTables, &cd, guard); err != nil {
-		return err
-	}
-	if err := thisLevel.deleteTables(cd.top, guard, topMove); err != nil {
-		return err
-	}
+	nextLevel.replaceTables(newTables, &cd, guard)
+	thisLevel.deleteTables(cd.top, guard, topMove)
 
 	// Note: For level 0, while doCompact is running, it is possible that new tables are added.
 	// However, the tables are added only to the end, so it is ok to just delete the first table.
