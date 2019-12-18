@@ -318,16 +318,14 @@ func TestGetMore(t *testing.T) {
 		data := func(i int) []byte {
 			return []byte(fmt.Sprintf("%b", i))
 		}
-		//	n := 500000
 		n := 10000
-		m := 45 // Increasing would cause ErrTxnTooBig
-		for i := 0; i < n; i += m {
-			txn := db.NewTransaction(true)
-			for j := i; j < i+m && j < n; j++ {
-				require.NoError(t, txn.Set(data(j), data(j)))
-			}
-			require.NoError(t, txn.Commit())
+
+		txn := db.NewTransaction(true)
+		for i := 0; i < n; i++ {
+			require.NoError(t, txn.Set(data(i), data(i)))
 		}
+		require.NoError(t, txn.Commit())
+
 		require.NoError(t, db.validate())
 
 		for i := 0; i < n; i++ {
@@ -341,15 +339,14 @@ func TestGetMore(t *testing.T) {
 		}
 
 		// Overwrite
-		for i := 0; i < n; i += m {
-			txn := db.NewTransaction(true)
-			for j := i; j < i+m && j < n; j++ {
-				require.NoError(t, txn.Set(data(j),
-					// Use a long value that will certainly exceed value threshold.
-					[]byte(fmt.Sprintf("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz%9d", j))))
-			}
-			require.NoError(t, txn.Commit())
+		txn = db.NewTransaction(true)
+		for i := 0; i < n; i++ {
+			require.NoError(t, txn.Set(data(i),
+				// Use a long value that will certainly exceed value threshold.
+				[]byte(fmt.Sprintf("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz%9d", i))))
 		}
+		require.NoError(t, txn.Commit())
+
 		require.NoError(t, db.validate())
 
 		for i := 0; i < n; i++ {
@@ -402,16 +399,15 @@ func TestGetMore(t *testing.T) {
 		txn1.Discard()
 
 		// "Delete" key.
-		for i := 0; i < n; i += m {
+		txn = db.NewTransaction(true)
+		for i := 0; i < n; i++ {
 			if (i % 10000) == 0 {
 				fmt.Printf("Deleting i=%d\n", i)
 			}
-			txn := db.NewTransaction(true)
-			for j := i; j < i+m && j < n; j++ {
-				require.NoError(t, txn.Delete(data(j)))
-			}
-			require.NoError(t, txn.Commit())
+			require.NoError(t, txn.Delete(data(i)))
 		}
+		require.NoError(t, txn.Commit())
+
 		db.validate()
 		for i := 0; i < n; i++ {
 			if (i % 10000) == 0 {
@@ -1646,14 +1642,12 @@ func TestDeleteRange(t *testing.T) {
 			return []byte(fmt.Sprintf("%06d", i))
 		}
 		n := 20000
-		m := 30 // Increasing would cause ErrTxnTooBig
-		for i := 0; i < n; i += m {
-			txn := db.NewTransaction(true)
-			for j := i; j < i+m && j < n; j++ {
-				require.NoError(t, txn.Set(data(j), make([]byte, 128)))
-			}
-			require.NoError(t, txn.Commit())
+
+		txn := db.NewTransaction(true)
+		for i := 0; i < n; i++ {
+			require.NoError(t, txn.Set(data(i), make([]byte, 128)))
 		}
+		require.NoError(t, txn.Commit())
 		require.NoError(t, db.validate())
 
 		db.DeleteFilesInRange(data(0), data(n/2))
@@ -1661,7 +1655,7 @@ func TestDeleteRange(t *testing.T) {
 		// wait for compaction.
 		time.Sleep(2 * time.Second)
 
-		txn := db.NewTransaction(false)
+		txn = db.NewTransaction(false)
 		for i := 0; i < n/4; i++ {
 			_, err := txn.Get(data(i))
 			require.Equal(t, ErrKeyNotFound, err)
