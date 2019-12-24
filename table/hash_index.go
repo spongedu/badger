@@ -35,15 +35,15 @@ func (e *entryPosition) decode(b []byte) {
 	e.offset = b[2]
 }
 
-func buildHashIndex(buf []byte, hashEntries []hashEntry, hashUtilRatio float32) []byte {
+func buildHashIndex(hashEntries []hashEntry, hashUtilRatio float32) []byte {
 	if len(hashEntries) == 0 {
-		return append(buf, u32ToBytes(0)...)
+		return u32ToBytes(0)
 	}
 
 	numBuckets := uint32(float32(len(hashEntries)) / hashUtilRatio)
-	bufLen := len(buf)
-	buf = append(buf, make([]byte, numBuckets*3+4)...)
-	buckets := buf[bufLen:]
+	buf := make([]byte, numBuckets*3+4)
+	copy(buf, u32ToBytes(numBuckets))
+	buckets := buf[4:]
 	for i := 0; i < int(numBuckets); i++ {
 		binary.LittleEndian.PutUint16(buckets[i*3:], resultNoEntry)
 	}
@@ -59,7 +59,6 @@ func buildHashIndex(buf []byte, hashEntries []hashEntry, hashUtilRatio float32) 
 			binary.LittleEndian.PutUint16(bucket[:2], resultFallback)
 		}
 	}
-	copy(buckets[numBuckets*3:], u32ToBytes(numBuckets))
 
 	return buf
 }
@@ -69,9 +68,9 @@ type hashIndex struct {
 	numBuckets int
 }
 
-func (i *hashIndex) readIndex(buf []byte, numBucket int) {
-	i.buckets = buf
-	i.numBuckets = numBucket
+func (i *hashIndex) readIndex(buf []byte) {
+	i.numBuckets = int(bytesToU32(buf[:4]))
+	i.buckets = buf[4:]
 }
 
 func (i *hashIndex) lookup(keyHash uint64) (uint32, uint8) {
