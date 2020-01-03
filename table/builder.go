@@ -24,7 +24,6 @@ import (
 	"reflect"
 	"unsafe"
 
-	"github.com/DataDog/zstd"
 	"github.com/coocood/badger/fileutil"
 	"github.com/coocood/badger/options"
 	"github.com/coocood/badger/surf"
@@ -436,7 +435,7 @@ func (b *Builder) compressData(data []byte) ([]byte, error) {
 	case options.Snappy:
 		return snappy.Encode(nil, data), nil
 	case options.ZSTD:
-		return zstd.Compress(nil, data)
+		return compress(data)
 	}
 	return nil, errors.New("Unsupported compression type")
 }
