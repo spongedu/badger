@@ -138,6 +138,7 @@ func (itr *blockIterator) prev() {
 // Iterator is an iterator for a Table.
 type Iterator struct {
 	t    *Table
+	tIdx *tableIndex
 	surf *surf.Iterator
 	bpos int
 	bi   blockIterator
@@ -150,11 +151,19 @@ type Iterator struct {
 
 // NewIterator returns a new iterator of the Table
 func (t *Table) NewIterator(reversed bool) *Iterator {
-	it := &Iterator{t: t, reversed: reversed}
+	idx, err := t.getIndex()
+	if err != nil {
+		return &Iterator{err: err}
+	}
+	return t.newIterator(reversed, idx)
+}
+
+func (t *Table) newIterator(reversed bool, index *tableIndex) *Iterator {
+	it := &Iterator{t: t, reversed: reversed, tIdx: index}
 	it.bi.globalTs = t.globalTs
 	binary.BigEndian.PutUint64(it.bi.globalTsBytes[:], math.MaxUint64-t.globalTs)
-	if t.surf != nil {
-		it.surf = t.surf.NewIterator()
+	if index.surf != nil {
+		it.surf = index.surf.NewIterator()
 	}
 	return it
 }
@@ -169,14 +178,21 @@ func (itr *Iterator) Valid() bool {
 	return itr.err == nil
 }
 
+func (itr *Iterator) Error() error {
+	if itr.err == io.EOF {
+		return nil
+	}
+	return itr.err
+}
+
 func (itr *Iterator) seekToFirst() {
-	numBlocks := len(itr.t.blockEndOffsets)
+	numBlocks := len(itr.tIdx.blockEndOffsets)
 	if numBlocks == 0 {
 		itr.err = io.EOF
 		return
 	}
 	itr.bpos = 0
-	block, err := itr.t.block(itr.bpos)
+	block, err := itr.t.block(itr.bpos, itr.tIdx)
 	if err != nil {
 		itr.err = err
 		return
@@ -187,13 +203,13 @@ func (itr *Iterator) seekToFirst() {
 }
 
 func (itr *Iterator) seekToLast() {
-	numBlocks := len(itr.t.blockEndOffsets)
+	numBlocks := len(itr.tIdx.blockEndOffsets)
 	if numBlocks == 0 {
 		itr.err = io.EOF
 		return
 	}
 	itr.bpos = numBlocks - 1
-	block, err := itr.t.block(itr.bpos)
+	block, err := itr.t.block(itr.bpos, itr.tIdx)
 	if err != nil {
 		itr.err = err
 		return
@@ -205,7 +221,7 @@ func (itr *Iterator) seekToLast() {
 
 func (itr *Iterator) seekHelper(blockIdx int, key y.Key) {
 	itr.bpos = blockIdx
-	block, err := itr.t.block(blockIdx)
+	block, err := itr.t.block(blockIdx, itr.tIdx)
 	if err != nil {
 		itr.err = err
 		return
@@ -217,7 +233,7 @@ func (itr *Iterator) seekHelper(blockIdx int, key y.Key) {
 
 func (itr *Iterator) seekFromOffset(blockIdx int, offset int, key y.Key) {
 	itr.bpos = blockIdx
-	block, err := itr.t.block(blockIdx)
+	block, err := itr.t.block(blockIdx, itr.tIdx)
 	if err != nil {
 		itr.err = err
 		return
@@ -232,8 +248,8 @@ func (itr *Iterator) seekFromOffset(blockIdx int, offset int, key y.Key) {
 }
 
 func (itr *Iterator) seekBlock(key y.Key) int {
-	return sort.Search(len(itr.t.blockEndOffsets), func(idx int) bool {
-		blockBaseKey := itr.t.getBlockBaseKey(idx)
+	return sort.Search(len(itr.tIdx.blockEndOffsets), func(idx int) bool {
+		blockBaseKey := itr.tIdx.getBlockBaseKey(idx)
 		if itr.t.globalTs != 0 {
 			cmp := bytes.Compare(blockBaseKey, key.UserKey)
 			if cmp != 0 {
@@ -251,6 +267,9 @@ func (itr *Iterator) seekFrom(key y.Key) {
 	itr.reset()
 
 	idx := itr.seekBlock(key)
+	if itr.err != nil {
+		return
+	}
 	if idx == 0 {
 		// The smallest key in our table is already strictly > key. We can return that.
 		// This is like a SeekToFirst.
@@ -267,7 +286,7 @@ func (itr *Iterator) seekFrom(key y.Key) {
 	itr.seekHelper(idx-1, key)
 	if itr.err == io.EOF {
 		// Case 1. Need to visit block[idx].
-		if idx == len(itr.t.blockEndOffsets) {
+		if idx == len(itr.tIdx.blockEndOffsets) {
 			// If idx == len(itr.t.blockEndOffsets), then input key is greater than ANY element of table.
 			// There's nothing we can do. Valid() should return false as we seek to end of table.
 			return
@@ -312,13 +331,13 @@ func (itr *Iterator) seekForPrev(key y.Key) {
 func (itr *Iterator) next() {
 	itr.err = nil
 
-	if itr.bpos >= len(itr.t.blockEndOffsets) {
+	if itr.bpos >= len(itr.tIdx.blockEndOffsets) {
 		itr.err = io.EOF
 		return
 	}
 
 	if itr.bi.data == nil {
-		block, err := itr.t.block(itr.bpos)
+		block, err := itr.t.block(itr.bpos, itr.tIdx)
 		if err != nil {
 			itr.err = err
 			return
@@ -346,7 +365,7 @@ func (itr *Iterator) prev() {
 	}
 
 	if itr.bi.data == nil {
-		block, err := itr.t.block(itr.bpos)
+		block, err := itr.t.block(itr.bpos, itr.tIdx)
 		if err != nil {
 			itr.err = err
 			return

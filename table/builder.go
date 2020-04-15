@@ -466,15 +466,14 @@ func (e *metaDecoder) currentId() byte {
 }
 
 func (e *metaDecoder) decode() []byte {
-	e.cursor++
-	l := int(bytesToU32(e.buf[e.cursor:]))
-	e.cursor += 4
-	d := e.buf[e.cursor : e.cursor+l]
-	e.cursor += l
+	cursor := e.cursor + 1
+	l := int(bytesToU32(e.buf[cursor:]))
+	cursor += 4
+	d := e.buf[cursor : cursor+l]
 	return d
 }
 
-func (e *metaDecoder) skip() {
+func (e *metaDecoder) next() {
 	l := int(bytesToU32(e.buf[e.cursor+1:]))
 	e.cursor += 1 + 4 + l
 }
