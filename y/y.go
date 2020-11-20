@@ -475,5 +475,7 @@ func NewKV(alloc *z.Allocator) *pb.KV {
 		return &pb.KV{}
 	}
 	b := alloc.AllocateAligned(kvsz)
-	return (*pb.KV)(unsafe.Pointer(&b[0]))
+	x := (*pb.KV)(unsafe.Pointer(&b[0]))
+	x.Reset()
+	return x
 }

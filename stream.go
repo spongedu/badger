@@ -19,6 +19,7 @@ package badger
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -223,6 +224,12 @@ func (st *Stream) produceKVs(ctx context.Context, threadId int) error {
 		sendIt := func() error {
 			select {
 			case st.kvChan <- outList:
+				sz := outList.Size()
+				if sz > 1<<20 || sz < 0 {
+					fmt.Println("[produce]", len(outList.Kv), sz)
+					b, _ := outList.Marshal()
+					fmt.Println(" [produce]", len(b))
+				}
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -320,6 +327,12 @@ func (st *Stream) streamKVs(ctx context.Context) error {
 		bytesSent += sz
 		count += len(batch.Kv)
 		t := time.Now()
+		sz2 := batch.Size()
+		if sz2 > 1<<20 || sz2 < 0 {
+			fmt.Println("[SendBatch]", len(batch.Kv), sz2)
+			b, _ := batch.Marshal()
+			fmt.Println(" [SendBatch]", len(b))
+		}
 		if err := st.Send(batch); err != nil {
 			return err
 		}
@@ -402,6 +415,7 @@ outer:
 func (st *Stream) Orchestrate(ctx context.Context) error {
 	st.allocPool = z.NewAllocatorPool(st.NumGo)
 	defer func() {
+		fmt.Printf("[Freeing up] %+v\n", time.Now())
 		for _, a := range st.allocators {
 			// Using AllocatorFrom is better because if the allocator is already freed up, it would
 			// return nil.
@@ -409,6 +423,7 @@ func (st *Stream) Orchestrate(ctx context.Context) error {
 			a.Release()
 		}
 		st.allocPool.Release()
+		fmt.Printf("[Freeing up done] %+v\n", time.Now())
 	}()
 
 	st.rangeCh = make(chan keyRange, 3) // Contains keys for posting lists.
