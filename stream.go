@@ -224,12 +224,6 @@ func (st *Stream) produceKVs(ctx context.Context, threadId int) error {
 		sendIt := func() error {
 			select {
 			case st.kvChan <- outList:
-				sz := outList.Size()
-				if sz > 1<<20 || sz < 0 {
-					fmt.Println("[produce]", len(outList.Kv), sz)
-					b, _ := outList.Marshal()
-					fmt.Println(" [produce]", len(b))
-				}
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -355,6 +349,12 @@ func (st *Stream) streamKVs(ctx context.Context) error {
 			}
 			select {
 			case kvs, ok := <-st.kvChan:
+				sz := kvs.Size()
+				if sz > 1<<20 || sz < 0 {
+					fmt.Println("[recv]", len(kvs.Kv), sz)
+					b, _ := kvs.Marshal()
+					fmt.Println(" [recv]", len(b))
+				}
 				if !ok {
 					break loop
 				}
