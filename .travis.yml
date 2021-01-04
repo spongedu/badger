@@ -18,9 +18,9 @@ notifications:
 script: >-
     if [ $TRAVIS_OS_NAME = "linux" ] && [ $go_32 ]; then
       uname -a
-      GOOS=linux GOARCH=arm go test -v ./...
+      env GO111MODULE=on GOOS=linux GOARCH=arm go test -v ./... || travis_terminate 1
     else
-      go test -v ./...
+      env GO111MODULE=on go test -v ./... || travis_terminate 1
       # Cross-compile for Plan 9
-      GOOS=plan9 go build ./...
+      env GO111MODULE=on GOOS=plan9 go build ./... || travis_terminate 1
     fi
