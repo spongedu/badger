@@ -24,6 +24,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"strings"
 	"unsafe"
 
 	"github.com/coocood/bbloom"
@@ -319,7 +320,7 @@ func (b *Builder) finishBlock() error {
 	b.buf = append(b.buf, u32ToBytes(uint32(len(b.entryEndOffsets)))...)
 	b.buf = appendU16(b.buf, uint16(blockCommonLen))
 
-	b.mw.Write([]byte(fmt.Sprintf("%s %d\n", string(firstKey), len(b.entryEndOffsets))))
+	b.mw.Write([]byte(fmt.Sprintf("%s %d\n", strings.Trim(string(firstKey), " "), len(b.entryEndOffsets))))
 
 	// Add base key.
 	b.baseKeys.append(firstKey)
