@@ -168,7 +168,7 @@ func NewTableBuilder(f *os.File, limiter *rate.Limiter, level int, opt options.T
 		level: level,
 		bufSize: opt.WriteBufferSize,
 	}
-	modFile, err := y.OpenTruncFile(ModelFilename(b.file.Name(), level), false)
+	modFile, err := y.OpenTruncFile(ModelFilename(b.file.Name()), false)
 	if err != nil {
 		panic(err)
 	}
@@ -202,7 +202,7 @@ func (b *Builder) Reset(f *os.File) {
 	b.resetBuffers()
 	b.w.Reset(f)
 
-	modFile, err := y.OpenTruncFile(ModelFilename(b.file.Name(), b.level), false)
+	modFile, err := y.OpenTruncFile(ModelFilename(b.file.Name()), false)
 	if err != nil {
 		panic(err)
 	}
