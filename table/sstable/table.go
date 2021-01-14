@@ -48,7 +48,7 @@ const (
 
 func IndexFilename(tableFilename string) string { return tableFilename + idxFileSuffix }
 
-func ModelFilename(tableFilename string) string { return tableFilename + modelFileSuffix }
+func ModelFilename(tableFilename string, level int) string { return tableFilename + fmt.Sprintf(".%d", level) + modelFileSuffix }
 
 type tableIndex struct {
 	blockEndOffsets []uint32

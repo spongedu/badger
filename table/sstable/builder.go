@@ -162,7 +162,7 @@ func NewTableBuilder(f *os.File, limiter *rate.Limiter, level int, opt options.T
 		// add one byte so the offset would never be 0, so oldOffset is 0 means no old version.
 		oldBlock: []byte{0},
 	}
-	modFile, err := y.OpenTruncFile(ModelFilename(b.file.Name()), false)
+	modFile, err := y.OpenTruncFile(ModelFilename(b.file.Name(), level), false)
 	if err != nil {
 		panic(err)
 	}
