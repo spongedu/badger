@@ -41,11 +41,14 @@ import (
 const (
 	fileSuffix    = ".sst"
 	idxFileSuffix = ".idx"
+	modelFileSuffix = ".mod"
 
 	intSize = int(unsafe.Sizeof(int(0)))
 )
 
 func IndexFilename(tableFilename string) string { return tableFilename + idxFileSuffix }
+
+func ModelFilename(tableFilename string) string { return tableFilename + modelFileSuffix }
 
 type tableIndex struct {
 	blockEndOffsets []uint32

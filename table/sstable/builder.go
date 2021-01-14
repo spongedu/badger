@@ -19,6 +19,7 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"go.uber.org/zap"
 	"math"
 	"os"
@@ -84,6 +85,7 @@ type Builder struct {
 
 	file          *os.File
 	w             tableWriter
+	mw            tableWriter
 	buf           []byte
 	writtenLen    int
 	rawWrittenLen int
@@ -158,6 +160,13 @@ func NewTableBuilder(f *os.File, limiter *rate.Limiter, level int, opt options.T
 		// add one byte so the offset would never be 0, so oldOffset is 0 means no old version.
 		oldBlock: []byte{0},
 	}
+	modFile, err := y.OpenTruncFile(ModelFilename(b.file.Name()), false)
+	if err != nil {
+		panic(err)
+	}
+	b.mw = fileutil.NewDirectWriter(f, opt.WriteBufferSize, limiter)
+	b.mw.Reset(modFile)
+
 	if f != nil {
 		b.w = fileutil.NewDirectWriter(f, opt.WriteBufferSize, limiter)
 	} else {
@@ -309,6 +318,8 @@ func (b *Builder) finishBlock() error {
 	b.buf = append(b.buf, u32SliceToBytes(b.entryEndOffsets)...)
 	b.buf = append(b.buf, u32ToBytes(uint32(len(b.entryEndOffsets)))...)
 	b.buf = appendU16(b.buf, uint16(blockCommonLen))
+
+	b.mw.Write([]byte(fmt.Sprintf("%s %d\n", string(firstKey), len(b.entryEndOffsets))))
 
 	// Add base key.
 	b.baseKeys.append(firstKey)
@@ -520,6 +531,9 @@ func (b *Builder) Finish() (*BuildResult, error) {
 	}
 	if b.file == nil {
 		result.IndexData = y.Copy(b.w.(*inMemWriter).Bytes())
+	}
+	if err = b.mw.Finish(); err != nil {
+		panic(err)
 	}
 	return result, nil
 }
