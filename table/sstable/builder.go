@@ -320,10 +320,12 @@ func (b *Builder) finishBlock() error {
 	b.buf = append(b.buf, u32ToBytes(uint32(len(b.entryEndOffsets)))...)
 	b.buf = appendU16(b.buf, uint16(blockCommonLen))
 
-	b.mw.Write([]byte(fmt.Sprintf("%s %d\n", strings.Trim(string(firstKey), " "), len(b.entryEndOffsets))))
 
 	// Add base key.
 	b.baseKeys.append(firstKey)
+
+	numBlocks := len(b.baseKeys.endOffs)
+	b.mw.Write([]byte(fmt.Sprintf("%s,%d\n", strings.Trim(string(firstKey), " "), numBlocks)))
 
 	before := b.w.Offset()
 	if err := b.compression.Compress(b.w, b.buf); err != nil {
@@ -343,7 +345,7 @@ func (b *Builder) finishBlock() error {
 
 	log.Warn("DUMPING A BLOCK:",
 		zap.String("File", fileName),
-		zap.Int("BlockNum", blockNum),
+		zap.Int("BlockNum", numBlocks),
 		zap.Int("BlockSize", blockSize),
 		zap.Int("BlockSizeInFile", blockSizeInFile),
 		zap.Int("EntryCnt", entryCount))
