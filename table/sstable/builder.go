@@ -118,6 +118,9 @@ type Builder struct {
 
 	singleKeyOldVers entrySlice
 	oldBlock         []byte
+
+	level int
+	bufSize int
 }
 
 type tableWriter interface {
@@ -161,6 +164,9 @@ func NewTableBuilder(f *os.File, limiter *rate.Limiter, level int, opt options.T
 		useSuRF:     level >= opt.SuRFStartLevel,
 		// add one byte so the offset would never be 0, so oldOffset is 0 means no old version.
 		oldBlock: []byte{0},
+
+		level: level,
+		bufSize: opt.WriteBufferSize,
 	}
 	modFile, err := y.OpenTruncFile(ModelFilename(b.file.Name(), level), false)
 	if err != nil {
@@ -195,6 +201,13 @@ func (b *Builder) Reset(f *os.File) {
 	b.file = f
 	b.resetBuffers()
 	b.w.Reset(f)
+
+	modFile, err := y.OpenTruncFile(ModelFilename(b.file.Name(), b.level), false)
+	if err != nil {
+		panic(err)
+	}
+	b.mw = fileutil.NewDirectWriter(f, b.bufSize, nil)
+	b.mw.Reset(modFile)
 }
 
 // SetIsManaged should be called when ingesting a table into a managed DB.

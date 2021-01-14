@@ -17,12 +17,14 @@
 package sstable
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,9 +44,30 @@ const (
 	fileSuffix    = ".sst"
 	idxFileSuffix = ".idx"
 	modelFileSuffix = ".mod"
+	plrFileSuffix = ".plr"
 
 	intSize = int(unsafe.Sizeof(int(0)))
 )
+
+type plrSegment struct {
+	Start     float64 `json:"start"`
+	Stop      float64 `json:"stop"`
+	Slope     float64 `json:"slope"`
+	Intercept float64 `json:"intercept"`
+}
+
+type plrSegments struct {
+	inner []plrSegment
+}
+
+func (s *plrSegments) predict(key float64) (float64, error) {
+	segmentIndex := sort.Search(len(s.inner), func(i int) bool { return s.inner[i].Stop > key })
+	if segmentIndex == len(s.inner) {
+		return 0.0, errors.New(fmt.Sprintf("key %f not found in any segment range", key))
+	}
+	segment := s.inner[segmentIndex]
+	return segment.Slope*key + segment.Intercept, nil
+}
 
 func IndexFilename(tableFilename string) string { return tableFilename + idxFileSuffix }
 
@@ -85,6 +108,10 @@ type Table struct {
 
 	oldBlockLen int64
 	oldBlock    []byte
+
+	// For plr
+	plrFd *os.File
+	plr *plrSegments
 }
 
 // CompressionType returns the compression algorithm used for block compression.
@@ -149,12 +176,14 @@ func OpenTable(filename string, blockCache *cache.Cache, indexCache *cache.Cache
 		return nil, err
 	}
 
+	plrFd, err := y.OpenExistingFile(filename+plrFileSuffix, 0)
 	t := &Table{
 		fd:         fd,
 		indexFd:    indexFd,
 		id:         id,
 		blockCache: blockCache,
 		indexCache: indexCache,
+		plrFd: plrFd,
 	}
 
 	if err := t.initTableInfo(); err != nil {
@@ -378,6 +407,21 @@ func (t *Table) getIndex() (*tableIndex, error) {
 func (t *Table) loadIndexData(useMmap bool) (*metaDecoder, error) {
 	if t.indexFd == nil {
 		return newMetaDecoder(t.indexData)
+	}
+	if t.plrFd != nil {
+		st, err := t.indexFd.Stat()
+		if err != nil {
+			panic(err)
+		}
+		plrRaw := make([]byte, st.Size())
+		if _, err = t.plrFd.ReadAt(plrRaw, 0); err != nil {
+			panic(err)
+		}
+		data := []plrSegment{}
+		json.Unmarshal(plrRaw, &data)
+		t.plr = &plrSegments{inner: data}
+	 } else {
+	 	t.plr = nil
 	}
 	fstat, err := t.indexFd.Stat()
 	if err != nil {

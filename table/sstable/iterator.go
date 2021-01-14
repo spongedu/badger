@@ -22,6 +22,7 @@ import (
 	"io"
 	"math"
 	"sort"
+	"strconv"
 
 	"github.com/pingcap/badger/surf"
 	"github.com/pingcap/badger/y"
@@ -178,6 +179,8 @@ type Iterator struct {
 	bi   blockIterator
 	err  error
 
+	plr *plrSegments
+
 	// Internally, Iterator is bidirectional. However, we only expose the
 	// unidirectional functionality for now.
 	reversed bool
@@ -193,7 +196,7 @@ func (t *Table) newIterator(reversed bool) *Iterator {
 }
 
 func (t *Table) newIteratorWithIdx(reversed bool, index *tableIndex) *Iterator {
-	it := &Iterator{t: t, reversed: reversed, tIdx: index}
+	it := &Iterator{t: t, reversed: reversed, tIdx: index, plr: t.plr}
 	it.bi.globalTs = t.globalTs
 	if t.oldBlockLen > 0 {
 		y.Assert(len(t.oldBlock) > 0)
@@ -292,12 +295,28 @@ func (itr *Iterator) seekBlock(key []byte) int {
 	})
 }
 
+func (itr *Iterator) seekPlr(key []byte) int {
+	k, _ := strconv.Atoi(string(key))
+	blk, _ := itr.plr.predict(float64(k))
+	lower, upper := int(blk - 1.0), int(blk + 1.0)
+	return sort.Search(upper - lower, func(idx int) bool {
+		blockBaseKey := itr.tIdx.baseKeys.getEntry(lower+idx)
+		return bytes.Compare(blockBaseKey, key) > 0
+	})
+}
+
 // seekFrom brings us to a key that is >= input key.
 func (itr *Iterator) seekFrom(key []byte) {
 	itr.err = nil
 	itr.reset()
 
-	idx := itr.seekBlock(key)
+	var idx int
+
+	//if itr.plr != nil {
+	//	idx = itr.seekPlr(key)
+	//}
+
+	idx = itr.seekBlock(key)
 	if itr.err != nil {
 		return
 	}
