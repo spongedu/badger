@@ -19,6 +19,8 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/prometheus/common/log"
+	"go.uber.org/zap"
 	"math"
 	"os"
 	"reflect"
@@ -316,6 +318,20 @@ func (b *Builder) finishBlock() error {
 	b.writtenLen += int(size)
 	b.rawWrittenLen += len(b.buf)
 
+	// ADD BY @spongedu. Add Debug info
+	fileName := b.file.Name()
+	blockNum := len(b.blockEndOffsets)
+	blockSize := len(b.buf)
+	blockSizeInFile := int(size)
+	entryCount := len(b.entryEndOffsets)
+
+	log.Warn("DUMPING A BLOCK:",
+		zap.String("File", fileName),
+		zap.Int("BlockNum", blockNum),
+		zap.Int("BlockSize", blockSize),
+		zap.Int("BlockSizeInFile", blockSizeInFile),
+		zap.Int("EntryCnt", entryCount))
+
 	// Reset the block for the next build.
 	b.entryEndOffsets = b.entryEndOffsets[:0]
 	b.counter = 0
@@ -415,6 +431,10 @@ func (b *Builder) Finish() (*BuildResult, error) {
 			return nil, err
 		}
 	}
+
+	// ADD By @spongedu.
+	writtenSize:= b.w.Offset()
+
 	if err = b.w.Finish(); err != nil {
 		return nil, err
 	}
@@ -447,6 +467,19 @@ func (b *Builder) Finish() (*BuildResult, error) {
 	if len(b.oldBlock) > 1 {
 		encoder.append(u32ToBytes(uint32(len(b.oldBlock))), idOldBlockLen)
 	}
+
+	// ADD BY @spongedu. Add Debug info
+	fileName := b.file.Name()
+	smallest := b.smallest.String()
+	biggest := b.biggest.String()
+	blockCnt := len(b.baseKeys.endOffs)
+
+	log.Warn("DUMPING A BLOCK:",
+		zap.String("File", fileName),
+		zap.Int("BlockCnt", blockCnt),
+		zap.Int64("DataFileSize", writtenSize),
+		zap.String("Smallest", smallest),
+		zap.String("Biggest", biggest))
 
 	var bloomFilter []byte
 	if !b.useSuRF {
