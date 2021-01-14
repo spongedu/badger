@@ -19,7 +19,6 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
-	"github.com/prometheus/common/log"
 	"go.uber.org/zap"
 	"math"
 	"os"
@@ -32,6 +31,7 @@ import (
 	"github.com/pingcap/badger/options"
 	"github.com/pingcap/badger/surf"
 	"github.com/pingcap/badger/y"
+	"github.com/pingcap/log"
 	"golang.org/x/time/rate"
 )
 
@@ -474,7 +474,7 @@ func (b *Builder) Finish() (*BuildResult, error) {
 	biggest := b.biggest.String()
 	blockCnt := len(b.baseKeys.endOffs)
 
-	log.Warn("DUMPING A BLOCK:",
+	log.Info("DUMPING A FILE:",
 		zap.String("File", fileName),
 		zap.Int("BlockCnt", blockCnt),
 		zap.Int64("DataFileSize", writtenSize),
