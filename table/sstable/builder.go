@@ -338,7 +338,6 @@ func (b *Builder) finishBlock() error {
 
 	// ADD BY @spongedu. Add Debug info
 	fileName := b.file.Name()
-	blockNum := len(b.blockEndOffsets)
 	blockSize := len(b.buf)
 	blockSizeInFile := int(size)
 	entryCount := len(b.entryEndOffsets)
