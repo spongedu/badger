@@ -19,6 +19,8 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
 	"io"
 	"math"
 	"sort"
@@ -295,14 +297,53 @@ func (itr *Iterator) seekBlock(key []byte) int {
 	})
 }
 
-func (itr *Iterator) seekPlr(key []byte) int {
+func Max(x, y int) int {
+	if x < y {
+		return y
+	}
+	return x
+}
+
+func Min(x, y int) int {
+	if x > y {
+		return y
+	}
+	return x
+}
+
+func (itr *Iterator) seekBlockWithPlr(key []byte) int {
+	if itr.plr == nil {
+		log.Fatal("This table has no plr and no training file there?")
+		return itr.seekBlock(key)
+	}
+
 	k, _ := strconv.Atoi(string(key))
-	blk, _ := itr.plr.predict(float64(k))
-	lower, upper := int(blk - 1.0), int(blk + 1.0)
-	return sort.Search(upper - lower, func(idx int) bool {
-		blockBaseKey := itr.tIdx.baseKeys.getEntry(lower+idx)
+	predictedIndex, err := itr.plr.predict(float64(k))
+	if err != nil {
+		log.Warn("plr predict failed", zap.Error(err))
+		return itr.seekBlock(key)
+	}
+
+	// Adding an extra 1 for the upper bound to be more conservative
+	// for example with predictedIndex=108.5, we ended with lower=100, upper=117 not 116
+	maxBlockSize := len(itr.tIdx.blockEndOffsets)
+	lower, upper :=
+		Max(int(predictedIndex)-8, 0), Min(int(predictedIndex)+8+1, maxBlockSize)
+
+	// make sure lower and upper are all valid,
+	// as lower might be a value predicted to be too big, upper might be too small
+	if lower >= maxBlockSize || upper < 1 {
+		return itr.seekBlock(key)
+	}
+
+	targetIndex := sort.Search(upper-lower, func(idx int) bool {
+		blockBaseKey := itr.tIdx.baseKeys.getEntry(lower + idx)
 		return bytes.Compare(blockBaseKey, key) > 0
 	})
+	// targetIndex is a value always between [0, 17],
+	// need to switch to the correct index again by adding the lower
+	log.Info("targetIndex found", zap.Int("targetIndex", targetIndex))
+	return lower + targetIndex
 }
 
 // seekFrom brings us to a key that is >= input key.
@@ -312,11 +353,7 @@ func (itr *Iterator) seekFrom(key []byte) {
 
 	var idx int
 
-	//if itr.plr != nil {
-	//	idx = itr.seekPlr(key)
-	//}
-
-	idx = itr.seekBlock(key)
+	idx = itr.seekBlockWithPlr(key)
 	if itr.err != nil {
 		return
 	}
