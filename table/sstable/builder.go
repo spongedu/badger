@@ -20,7 +20,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"go.uber.org/zap"
+	//"go.uber.org/zap"
 	"math"
 	"os"
 	"reflect"
@@ -33,7 +33,7 @@ import (
 	"github.com/pingcap/badger/options"
 	"github.com/pingcap/badger/surf"
 	"github.com/pingcap/badger/y"
-	"github.com/pingcap/log"
+	//"github.com/pingcap/log"
 	"golang.org/x/time/rate"
 )
 
@@ -350,6 +350,7 @@ func (b *Builder) finishBlock() error {
 	b.writtenLen += int(size)
 	b.rawWrittenLen += len(b.buf)
 
+	/*
 	// ADD BY @spongedu. Add Debug info
 	fileName := b.file.Name()
 	blockSize := len(b.buf)
@@ -362,6 +363,7 @@ func (b *Builder) finishBlock() error {
 		zap.Int("BlockSize", blockSize),
 		zap.Int("BlockSizeInFile", blockSizeInFile),
 		zap.Int("EntryCnt", entryCount))
+	 */
 
 	// Reset the block for the next build.
 	b.entryEndOffsets = b.entryEndOffsets[:0]
@@ -464,7 +466,7 @@ func (b *Builder) Finish() (*BuildResult, error) {
 	}
 
 	// ADD By @spongedu.
-	writtenSize:= b.w.Offset()
+	//writtenSize:= b.w.Offset()
 
 	if err = b.w.Finish(); err != nil {
 		return nil, err
@@ -499,6 +501,7 @@ func (b *Builder) Finish() (*BuildResult, error) {
 		encoder.append(u32ToBytes(uint32(len(b.oldBlock))), idOldBlockLen)
 	}
 
+	/*
 	// ADD BY @spongedu. Add Debug info
 	fileName := b.file.Name()
 	smallest := b.smallest.String()
@@ -511,6 +514,7 @@ func (b *Builder) Finish() (*BuildResult, error) {
 		zap.Int64("DataFileSize", writtenSize),
 		zap.String("Smallest", smallest),
 		zap.String("Biggest", biggest))
+	 */
 
 	var bloomFilter []byte
 	if !b.useSuRF {
