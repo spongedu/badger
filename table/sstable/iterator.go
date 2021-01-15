@@ -313,7 +313,7 @@ func Min(x, y int) int {
 
 func (itr *Iterator) seekBlockWithPlr(key []byte) int {
 	if itr.plr == nil {
-		log.Fatal("This table has no plr and no training file there?")
+		log.Error("This table has no plr and no training file there?")
 		return itr.seekBlock(key)
 	}
 
@@ -328,7 +328,7 @@ func (itr *Iterator) seekBlockWithPlr(key []byte) int {
 	// for example with predictedIndex=108.5, we ended with lower=100, upper=117 not 116
 	maxBlockSize := len(itr.tIdx.blockEndOffsets)
 	lower, upper :=
-		Max(int(predictedIndex)-8, 0), Min(int(predictedIndex)+8+1, maxBlockSize)
+		Max(int(predictedIndex)-1, 0), Min(int(predictedIndex)+1+1, maxBlockSize)
 
 	// make sure lower and upper are all valid,
 	// as lower might be a value predicted to be too big, upper might be too small

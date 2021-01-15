@@ -252,10 +252,16 @@ func (t *Table) NewIterator(reversed bool) y.Iterator {
 }
 
 func (t *Table) Get(key y.Key, keyHash uint64) (y.ValueStruct, error) {
+	// By @spongedu. disable pointGet for now to try plr search
+	ok := false
+	var resultKey y.Key
+	var resultVs y.ValueStruct
+	/*
 	resultKey, resultVs, ok, err := t.pointGet(key, keyHash)
 	if err != nil {
 		return y.ValueStruct{}, err
 	}
+	 */
 	if !ok {
 		it := t.NewIterator(false)
 		it.Seek(key.UserKey)
