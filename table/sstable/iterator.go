@@ -330,7 +330,7 @@ func (itr *Iterator) seekBlockWithPlr(key []byte) int {
 	lower, upper :=
 		Max(int(predictedIndex)-1, 0), Min(int(predictedIndex)+1+1, maxBlockSize)
 
-	log.Info("PLR: ", zap.String("filename", itr.plr.FName), zap.String("key", string(key)), zap.Int("lower", lower), zap.Int("upper", upper))
+	log.Info("PLR: ", zap.String("filename", itr.plr.FName), zap.String("key", string(key)), zap.Float64("k", float64(k)), zap.Int("lower", lower), zap.Int("upper", upper))
 	// make sure lower and upper are all valid,
 	// as lower might be a value predicted to be too big, upper might be too small
 	if lower >= maxBlockSize || upper < 1 {
