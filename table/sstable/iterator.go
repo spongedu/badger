@@ -25,6 +25,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/pingcap/badger/surf"
 	"github.com/pingcap/badger/y"
@@ -317,7 +318,7 @@ func (itr *Iterator) seekBlockWithPlr(key []byte) int {
 		return itr.seekBlock(key)
 	}
 
-	k, _ := strconv.Atoi(string(key))
+	k, _ := strconv.Atoi(strings.Trim(string(key), " "))
 	predictedIndex, err := itr.plr.predict(float64(k))
 	if err != nil {
 		log.Warn("plr predict failed", zap.Error(err))
