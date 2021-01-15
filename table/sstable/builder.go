@@ -285,8 +285,9 @@ func (b *Builder) finishBlock() error {
 		b.flushSingleKeyOldVers()
 	}
 	firstKey := b.tmpKeys.getEntry(0)
-	lastKey := b.tmpKeys.getLast()
-	blockCommonLen := keyDiffIdx(firstKey, lastKey)
+	//lastKey := b.tmpKeys.getLast()
+	//blockCommonLen := keyDiffIdx(firstKey, lastKey)
+	blockCommonLen := 0
 	for i := 0; i < b.tmpKeys.length(); i++ {
 		key := b.tmpKeys.getEntry(i)
 		b.buf = appendU16(b.buf, uint16(len(key)-blockCommonLen))
