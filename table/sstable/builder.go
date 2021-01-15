@@ -20,6 +20,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"go.uber.org/zap"
+
 	//"go.uber.org/zap"
 	"math"
 	"os"
@@ -33,7 +35,7 @@ import (
 	"github.com/pingcap/badger/options"
 	"github.com/pingcap/badger/surf"
 	"github.com/pingcap/badger/y"
-	//"github.com/pingcap/log"
+	"github.com/pingcap/log"
 	"golang.org/x/time/rate"
 )
 
@@ -150,7 +152,7 @@ func (w *inMemWriter) Finish() error {
 // If the f is nil, the builder builds in-memory result.
 // If the limiter is nil, the write speed during table build will not be limited.
 func NewTableBuilder(f *os.File, limiter *rate.Limiter, level int, opt options.TableBuilderOptions) *Builder {
-	//log.Warn("GEN SSTABLE", zap.String("File: ", f.Name()), zap.Int("Level", level))
+	log.Warn("GEN SSTABLE", zap.String("File: ", f.Name()), zap.Int("Level", level))
 	t := float64(opt.LevelSizeMultiplier)
 	fprBase := math.Pow(t, 1/(t-1)) * opt.LogicalBloomFPR * (t - 1)
 	levelFactor := math.Pow(t, float64(opt.MaxLevels-level))
