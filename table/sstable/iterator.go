@@ -19,14 +19,11 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/pingcap/badger/surf"
+	"github.com/pingcap/badger/y"
 	"io"
 	"math"
 	"sort"
-	"strconv"
-	"strings"
-
-	"github.com/pingcap/badger/surf"
-	"github.com/pingcap/badger/y"
 )
 
 type singleKeyIterator struct {
@@ -316,8 +313,8 @@ func (itr *Iterator) seekBlockWithPlr(key []byte) int {
 		return itr.seekBlock(key)
 	}
 
-	k, _ := strconv.Atoi(strings.Trim(string(key), " "))
-	predictedIndex, err := itr.plr.predict(float64(k))
+	// by @spongedu. We suppose key as first
+	predictedIndex, err := itr.plr.predict(float64(binary.BigEndian.Uint64(key)))
 	if err != nil {
 		//log.Warn("plr predict failed", zap.Error(err))
 		return itr.seekBlock(key)

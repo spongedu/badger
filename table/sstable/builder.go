@@ -24,7 +24,6 @@ import (
 	"math"
 	"os"
 	"reflect"
-	"strings"
 	"unsafe"
 
 	"github.com/coocood/bbloom"
@@ -339,7 +338,9 @@ func (b *Builder) finishBlock() error {
 	b.baseKeys.append(firstKey)
 
 	numBlocks := len(b.baseKeys.endOffs)
-	b.mw.Write([]byte(fmt.Sprintf("%s,%d\n", strings.Trim(string(firstKey), " "), numBlocks)))
+	// By @spongedu
+	// We suppose input as a 8 byte uint here.
+	b.mw.Write([]byte(fmt.Sprintf("%d,%d\n", binary.BigEndian.Uint64(firstKey), numBlocks)))
 
 	before := b.w.Offset()
 	if err := b.compression.Compress(b.w, b.buf); err != nil {
