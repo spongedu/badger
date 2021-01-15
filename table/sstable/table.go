@@ -58,6 +58,7 @@ type plrSegment struct {
 }
 
 type plrSegments struct {
+	FName  string
 	inner []plrSegment
 }
 
@@ -189,7 +190,7 @@ func OpenTable(filename string, blockCache *cache.Cache, indexCache *cache.Cache
 		data := []plrSegment{}
 		json.Unmarshal(out, &data)
 		log.Printf("plrSegment loaded: %v", data)
-		plr = &plrSegments{inner: data}
+		plr = &plrSegments{inner: data, FName: filename}
 	}
 
 	t := &Table{
