@@ -17,12 +17,16 @@
 package sstable
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,13 +43,44 @@ import (
 )
 
 const (
-	fileSuffix    = ".sst"
-	idxFileSuffix = ".idx"
+	fileSuffix      = ".sst"
+	idxFileSuffix   = ".idx"
+	modelFileSuffix = ".mod"
+	mphFileSuffix = ".mph"
 
 	intSize = int(unsafe.Sizeof(int(0)))
 )
 
+type plrSegment struct {
+	Start     float64 `json:"start"`
+	Stop      float64 `json:"stop"`
+	Slope     float64 `json:"slope"`
+	Intercept float64 `json:"intercept"`
+}
+
+type plrSegments struct {
+	FName  string
+	inner []plrSegment
+}
+
+func (s *plrSegments) predict(key float64) (float64, error) {
+	segmentIndex := sort.Search(len(s.inner), func(i int) bool { return s.inner[i].Stop > key })
+	if segmentIndex == len(s.inner) {
+		return 0.0, errors.New(fmt.Sprintf("key %f not found in any segment range", key))
+	}
+	segment := s.inner[segmentIndex]
+	return segment.Slope*key + segment.Intercept, nil
+}
+
 func IndexFilename(tableFilename string) string { return tableFilename + idxFileSuffix }
+
+func ModelFilename(tableFilename string) string {
+	return tableFilename + modelFileSuffix
+}
+
+func MphFileName(tableFilename string) string {
+	return tableFilename + mphFileSuffix
+}
 
 type tableIndex struct {
 	blockEndOffsets []uint32
@@ -82,6 +117,12 @@ type Table struct {
 
 	oldBlockLen int64
 	oldBlock    []byte
+
+	// For plr
+	plr *plrSegments
+
+	// For mph
+	mphIndex *MphIndex
 }
 
 // CompressionType returns the compression algorithm used for block compression.
@@ -146,13 +187,32 @@ func OpenTable(filename string, blockCache *cache.Cache, indexCache *cache.Cache
 		return nil, err
 	}
 
+
+
+	var plr *plrSegments = nil
+	out, err := exec.Command("./plr", "-i", ModelFilename(filename), "-e", "1.0").Output()
+	if err != nil {
+		if e, ok := err.(*exec.ExitError); ok {
+			fmt.Printf("%s\n", string(e.Stderr))
+		}
+		log.Fatal(err.Error())
+	} else {
+		data := []plrSegment{}
+		json.Unmarshal(out, &data)
+		log.Printf("plrSegment loaded: %v", data)
+		plr = &plrSegments{inner: data, FName: filename}
+	}
+
 	t := &Table{
 		fd:         fd,
 		indexFd:    indexFd,
 		id:         id,
 		blockCache: blockCache,
 		indexCache: indexCache,
+		plr:        plr,
+		mphIndex:   nil,
 	}
+
 
 	if err := t.initTableInfo(); err != nil {
 		t.Close()
@@ -205,10 +265,16 @@ func (t *Table) NewIterator(reversed bool) y.Iterator {
 }
 
 func (t *Table) Get(key y.Key, keyHash uint64) (y.ValueStruct, error) {
+	// By @spongedu. disable pointGet for now to try plr search
+	// ok := false
+	// var resultKey y.Key
+	// var resultVs y.ValueStruct
 	resultKey, resultVs, ok, err := t.pointGet(key, keyHash)
 	if err != nil {
 		return y.ValueStruct{}, err
 	}
+	/*
+	 */
 	if !ok {
 		it := t.NewIterator(false)
 		it.Seek(key.UserKey)
@@ -232,6 +298,33 @@ func (t *Table) Get(key y.Key, keyHash uint64) (y.ValueStruct, error) {
 // which means caller should fallback to seek search. Otherwise it value will be true.
 // If the hash index does not contain such an element the returned key will be nil.
 func (t *Table) pointGet(key y.Key, keyHash uint64) (y.Key, y.ValueStruct, bool, error) {
+	/*
+	if  t.mphIndex == nil {
+		if _, err := os.Stat(MphFileName(t.Filename())); err == nil {
+			fd, err := y.OpenExistingFile(MphFileName(t.Filename()), 0)
+			if err != nil {
+				panic(err)
+			}
+			fstat, err := fd.Stat()
+			if err != nil {
+				panic(err)
+			}
+			defer fd.Close()
+			mphData := make([]byte, fstat.Size())
+			log.Printf("LOAD DATA SIZE: %s", len(mphData))
+			if _, err = fd.ReadAt(mphData, fstat.Size()); err != nil {
+				panic(err)
+			}
+			t.mphIndex.readIndex(mphData)
+		}
+	}
+	 */
+
+	_, err := t.getIndex()
+	if err != nil {
+		return y.Key{}, y.ValueStruct{}, false, err
+	}
+	/*
 	idx, err := t.getIndex()
 	if err != nil {
 		return y.Key{}, y.ValueStruct{}, false, err
@@ -239,8 +332,10 @@ func (t *Table) pointGet(key y.Key, keyHash uint64) (y.Key, y.ValueStruct, bool,
 	if idx.bf != nil && !idx.bf.Has(keyHash) {
 		return y.Key{}, y.ValueStruct{}, true, err
 	}
+	 */
 
 	blkIdx, offset := uint32(resultFallback), uint8(0)
+	/*
 	if idx.hIdx != nil {
 		blkIdx, offset = idx.hIdx.lookup(keyHash)
 	} else if idx.surf != nil {
@@ -253,6 +348,8 @@ func (t *Table) pointGet(key y.Key, keyHash uint64) (y.Key, y.ValueStruct, bool,
 			blkIdx, offset = uint32(pos.blockIdx), pos.offset
 		}
 	}
+	 */
+	blkIdx, offset = t.mphIndex.lookup(key.UserKey)
 	if blkIdx == resultFallback {
 		return y.Key{}, y.ValueStruct{}, false, nil
 	}
@@ -340,6 +437,11 @@ func (t *Table) readTableIndex(d *metaDecoder) *tableIndex {
 				idx.surf = new(surf.SuRF)
 				idx.surf.Unmarshal(d)
 			}
+		case idmpf:
+			if d := d.decode(); len(d) != 0 {
+				t.mphIndex = &MphIndex{}
+				t.mphIndex.readIndex(d)
+			}
 		}
 	}
 	return idx
@@ -373,6 +475,7 @@ func (t *Table) getIndex() (*tableIndex, error) {
 }
 
 func (t *Table) loadIndexData(useMmap bool) (*metaDecoder, error) {
+
 	if t.indexFd == nil {
 		return newMetaDecoder(t.indexData)
 	}

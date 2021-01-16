@@ -28,7 +28,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dgryski/go-farm"
 	"github.com/ncw/directio"
 	"github.com/pingcap/badger/cache"
 	"github.com/pingcap/badger/epoch"
@@ -702,8 +701,9 @@ func (db *DB) get(key y.Key) y.ValueStruct {
 			return vs
 		}
 	}
-	keyHash := farm.Fingerprint64(key.UserKey)
-	return db.lc.get(key, keyHash)
+	// By spongedu
+	//keyHash := farm.Fingerprint64(key.UserKey)
+	return db.lc.get(key, 0)
 }
 
 func (db *DB) multiGet(pairs []keyValuePair) {
@@ -954,7 +954,7 @@ func (db *DB) runFlushMemTable(c *y.Closer) error {
 		fd.Close()
 		tbl, err := sstable.OpenTable(filename, db.blockCache, db.indexCache)
 		if err != nil {
-			log.Info("error while opening table", zap.Error(err))
+			log.Info("error while opening table", zap.Error(err), zap.String("filename", filename))
 			return err
 		}
 		err = db.lc.addLevel0Table(tbl, headInfo)

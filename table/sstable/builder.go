@@ -19,6 +19,8 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
+	//"go.uber.org/zap"
 	"math"
 	"os"
 	"reflect"
@@ -30,6 +32,7 @@ import (
 	"github.com/pingcap/badger/options"
 	"github.com/pingcap/badger/surf"
 	"github.com/pingcap/badger/y"
+	//"github.com/pingcap/log"
 	"golang.org/x/time/rate"
 )
 
@@ -82,6 +85,8 @@ type Builder struct {
 
 	file          *os.File
 	w             tableWriter
+	mw            tableWriter
+	//mphw          tableWriter
 	buf           []byte
 	writtenLen    int
 	rawWrittenLen int
@@ -99,6 +104,7 @@ type Builder struct {
 	biggest  y.Key
 
 	hashEntries []hashEntry
+	mphEntries  []MphEntry
 	bloomFpr    float64
 	useGlobalTS bool
 	opt         options.TableBuilderOptions
@@ -113,6 +119,11 @@ type Builder struct {
 
 	singleKeyOldVers entrySlice
 	oldBlock         []byte
+
+	level int
+	bufSize int
+
+	//mphF *os.File
 }
 
 type tableWriter interface {
@@ -142,6 +153,7 @@ func (w *inMemWriter) Finish() error {
 // If the f is nil, the builder builds in-memory result.
 // If the limiter is nil, the write speed during table build will not be limited.
 func NewTableBuilder(f *os.File, limiter *rate.Limiter, level int, opt options.TableBuilderOptions) *Builder {
+	//log.Warn("GEN SSTABLE", zap.String("File: ", f.Name()), zap.Int("Level", level))
 	t := float64(opt.LevelSizeMultiplier)
 	fprBase := math.Pow(t, 1/(t-1)) * opt.LogicalBloomFPR * (t - 1)
 	levelFactor := math.Pow(t, float64(opt.MaxLevels-level))
@@ -149,13 +161,34 @@ func NewTableBuilder(f *os.File, limiter *rate.Limiter, level int, opt options.T
 		file:        f,
 		buf:         make([]byte, 0, 4*1024),
 		hashEntries: make([]hashEntry, 0, 4*1024),
+		mphEntries:  make([]MphEntry, 0, 4*1024),
 		bloomFpr:    fprBase / levelFactor,
 		compression: opt.CompressionPerLevel[level],
 		opt:         opt,
 		useSuRF:     level >= opt.SuRFStartLevel,
 		// add one byte so the offset would never be 0, so oldOffset is 0 means no old version.
 		oldBlock: []byte{0},
+
+		level: level,
+		bufSize: opt.WriteBufferSize,
+
 	}
+	modFile, err := y.OpenTruncFile(ModelFilename(b.file.Name()), false)
+	if err != nil {
+		panic(err)
+	}
+	b.mw = fileutil.NewDirectWriter(f, opt.WriteBufferSize, limiter)
+	b.mw.Reset(modFile)
+
+	// mphFile, err := y.OpenTruncFile(MphFileName(b.file.Name()), false)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	//b.mphF = mphFile
+
+	//b.mphw = fileutil.NewDirectWriter(f, opt.WriteBufferSize, limiter)
+	//b.mphw.Reset(mphFile)
+
 	if f != nil {
 		b.w = fileutil.NewDirectWriter(f, opt.WriteBufferSize, limiter)
 	} else {
@@ -170,6 +203,7 @@ func NewExternalTableBuilder(f *os.File, limiter *rate.Limiter, opt options.Tabl
 		w:           fileutil.NewDirectWriter(f, opt.WriteBufferSize, limiter),
 		buf:         make([]byte, 0, 4*1024),
 		hashEntries: make([]hashEntry, 0, 4*1024),
+		mphEntries: make([]MphEntry, 0, 4*1024),
 		bloomFpr:    opt.LogicalBloomFPR,
 		useGlobalTS: true,
 		compression: compression,
@@ -182,6 +216,26 @@ func (b *Builder) Reset(f *os.File) {
 	b.file = f
 	b.resetBuffers()
 	b.w.Reset(f)
+
+	modFile, err := y.OpenTruncFile(ModelFilename(b.file.Name()), false)
+	if err != nil {
+		panic(err)
+	}
+	b.mw = fileutil.NewDirectWriter(f, b.bufSize, nil)
+	b.mw.Reset(modFile)
+
+	// if b.mphF != nil {
+	// 	b.mphF.Close()
+	// }
+
+	// mphFile, err := y.OpenTruncFile(MphFileName(b.file.Name()), false)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	//b.mphF = mphFile
+
+	//b.mphw = fileutil.NewDirectWriter(f, b.bufSize, nil)
+	//b.mphw.Reset(mphFile)
 }
 
 // SetIsManaged should be called when ingesting a table into a managed DB.
@@ -198,6 +252,7 @@ func (b *Builder) resetBuffers() {
 	b.blockEndOffsets = b.blockEndOffsets[:0]
 	b.entryEndOffsets = b.entryEndOffsets[:0]
 	b.hashEntries = b.hashEntries[:0]
+	b.mphEntries = b.mphEntries[:0]
 	b.surfKeys = nil
 	b.surfVals = nil
 	b.smallest.UserKey = b.smallest.UserKey[:0]
@@ -241,6 +296,7 @@ func (b *Builder) addIndex(key y.Key) {
 		b.surfVals = append(b.surfVals, pos.encode())
 	} else {
 		b.hashEntries = append(b.hashEntries, hashEntry{pos, keyHash})
+		b.mphEntries = append(b.mphEntries, MphEntry{pos, string(key.UserKey)})
 	}
 }
 
@@ -285,8 +341,12 @@ func (b *Builder) finishBlock() error {
 		b.flushSingleKeyOldVers()
 	}
 	firstKey := b.tmpKeys.getEntry(0)
-	lastKey := b.tmpKeys.getLast()
-	blockCommonLen := keyDiffIdx(firstKey, lastKey)
+
+	// By @spongedu. disable key compressionj
+	// lastKey := b.tmpKeys.getLast()
+	// blockCommonLen := keyDiffIdx(firstKey, lastKey)
+	blockCommonLen := 0
+
 	for i := 0; i < b.tmpKeys.length(); i++ {
 		key := b.tmpKeys.getEntry(i)
 		b.buf = appendU16(b.buf, uint16(len(key)-blockCommonLen))
@@ -304,8 +364,14 @@ func (b *Builder) finishBlock() error {
 	b.buf = append(b.buf, u32ToBytes(uint32(len(b.entryEndOffsets)))...)
 	b.buf = appendU16(b.buf, uint16(blockCommonLen))
 
+
 	// Add base key.
 	b.baseKeys.append(firstKey)
+
+	numBlocks := len(b.baseKeys.endOffs)
+	// By @spongedu
+	// We suppose input as a 8 byte uint here.
+	b.mw.Write([]byte(fmt.Sprintf("%d,%d\n", binary.BigEndian.Uint64(firstKey), numBlocks)))
 
 	before := b.w.Offset()
 	if err := b.compression.Compress(b.w, b.buf); err != nil {
@@ -315,6 +381,21 @@ func (b *Builder) finishBlock() error {
 	b.blockEndOffsets = append(b.blockEndOffsets, uint32(b.writtenLen+int(size)))
 	b.writtenLen += int(size)
 	b.rawWrittenLen += len(b.buf)
+
+	/*
+	// ADD BY @spongedu. Add Debug info
+	fileName := b.file.Name()
+	blockSize := len(b.buf)
+	blockSizeInFile := int(size)
+	entryCount := len(b.entryEndOffsets)
+
+	log.Warn("DUMPING A BLOCK:",
+		zap.String("File", fileName),
+		zap.Int("BlockNum", numBlocks),
+		zap.Int("BlockSize", blockSize),
+		zap.Int("BlockSizeInFile", blockSizeInFile),
+		zap.Int("EntryCnt", entryCount))
+	 */
 
 	// Reset the block for the next build.
 	b.entryEndOffsets = b.entryEndOffsets[:0]
@@ -393,6 +474,7 @@ const (
 	idHashIndex
 	idSuRFIndex
 	idOldBlockLen
+	idmpf
 )
 
 // BuildResult contains the build result info, if it's file based compaction, fileName should be used to open Table.
@@ -405,6 +487,11 @@ type BuildResult struct {
 
 // Finish finishes the table by appending the index.
 func (b *Builder) Finish() (*BuildResult, error) {
+	// defer  func() {
+	// 	if b.mphF != nil {
+	// 		b.mphF.Close()
+	// 	}
+	// }()
 	err := b.finishBlock() // This will never start a new block.
 	if err != nil {
 		return nil, err
@@ -415,6 +502,10 @@ func (b *Builder) Finish() (*BuildResult, error) {
 			return nil, err
 		}
 	}
+
+	// ADD By @spongedu.
+	//writtenSize:= b.w.Offset()
+
 	if err = b.w.Finish(); err != nil {
 		return nil, err
 	}
@@ -448,6 +539,21 @@ func (b *Builder) Finish() (*BuildResult, error) {
 		encoder.append(u32ToBytes(uint32(len(b.oldBlock))), idOldBlockLen)
 	}
 
+	/*
+	// ADD BY @spongedu. Add Debug info
+	fileName := b.file.Name()
+	smallest := b.smallest.String()
+	biggest := b.biggest.String()
+	blockCnt := len(b.baseKeys.endOffs)
+
+	log.Info("DUMPING A FILE:",
+		zap.String("File", fileName),
+		zap.Int("BlockCnt", blockCnt),
+		zap.Int64("DataFileSize", writtenSize),
+		zap.String("Smallest", smallest),
+		zap.String("Biggest", biggest))
+	 */
+
 	var bloomFilter []byte
 	if !b.useSuRF {
 		bf := bbloom.New(float64(len(b.hashEntries)), b.bloomFpr)
@@ -463,6 +569,8 @@ func (b *Builder) Finish() (*BuildResult, error) {
 		hashIndex = buildHashIndex(b.hashEntries, b.opt.HashUtilRatio)
 	}
 	encoder.append(hashIndex, idHashIndex)
+
+	encoder.append(buildMphIndex(b.mphEntries), idmpf)
 
 	var surfIndex []byte
 	if b.useSuRF && len(b.surfKeys) > 0 {
@@ -484,6 +592,12 @@ func (b *Builder) Finish() (*BuildResult, error) {
 	if b.file == nil {
 		result.IndexData = y.Copy(b.w.(*inMemWriter).Bytes())
 	}
+	if err = b.mw.Finish(); err != nil {
+		panic(err)
+	}
+	//if err = b.mphw.Finish(); err != nil {
+	//	panic(err)
+	//}
 	return result, nil
 }
 
