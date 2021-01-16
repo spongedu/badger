@@ -16,7 +16,7 @@ type Table struct {
 
 // Build builds a Table from keys using the "Hash, displace, and compress"
 // algorithm described in http://cmph.sourceforge.net/papers/esa09.pdf.
-func Build(keys [][]byte) *Table {
+func Build(keys []string) *Table {
 	var (
 		level0        = make([]uint32, nextPow2(len(keys)/4))
 		level0Mask    = len(level0) - 1
@@ -26,7 +26,7 @@ func Build(keys [][]byte) *Table {
 		zeroSeed      = murmurSeed(0)
 	)
 	for i, s := range keys {
-		n := int(zeroSeed.hash(*(*string)(unsafe.Pointer(&s)))) & level0Mask
+		n := int(zeroSeed.hash(s)) & level0Mask
 		sparseBuckets[n] = append(sparseBuckets[n], i)
 	}
 	var buckets []indexBucket
