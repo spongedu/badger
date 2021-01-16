@@ -86,6 +86,7 @@ type Builder struct {
 	file          *os.File
 	w             tableWriter
 	mw            tableWriter
+	mphw          tableWriter
 	buf           []byte
 	writtenLen    int
 	rawWrittenLen int
@@ -176,6 +177,14 @@ func NewTableBuilder(f *os.File, limiter *rate.Limiter, level int, opt options.T
 	b.mw = fileutil.NewDirectWriter(f, opt.WriteBufferSize, limiter)
 	b.mw.Reset(modFile)
 
+	mphFile, err := y.OpenTruncFile(MphFileName(b.file.Name()), false)
+	if err != nil {
+		panic(err)
+	}
+
+	b.mphw = fileutil.NewDirectWriter(f, opt.WriteBufferSize, limiter)
+	b.mphw.Reset(mphFile)
+
 	if f != nil {
 		b.w = fileutil.NewDirectWriter(f, opt.WriteBufferSize, limiter)
 	} else {
@@ -210,6 +219,15 @@ func (b *Builder) Reset(f *os.File) {
 	}
 	b.mw = fileutil.NewDirectWriter(f, b.bufSize, nil)
 	b.mw.Reset(modFile)
+
+
+	mphFile, err := y.OpenTruncFile(MphFileName(b.file.Name()), false)
+	if err != nil {
+		panic(err)
+	}
+
+	b.mphw = fileutil.NewDirectWriter(f, b.bufSize, nil)
+	b.mphw.Reset(mphFile)
 }
 
 // SetIsManaged should be called when ingesting a table into a managed DB.
@@ -538,6 +556,8 @@ func (b *Builder) Finish() (*BuildResult, error) {
 	}
 	encoder.append(hashIndex, idHashIndex)
 
+	b.mphw.Write(buildMphIndex(b.mphEntries))
+
 	var surfIndex []byte
 	if b.useSuRF && len(b.surfKeys) > 0 {
 		hl := uint32(b.opt.SuRFOptions.HashSuffixLen)
@@ -559,6 +579,9 @@ func (b *Builder) Finish() (*BuildResult, error) {
 		result.IndexData = y.Copy(b.w.(*inMemWriter).Bytes())
 	}
 	if err = b.mw.Finish(); err != nil {
+		panic(err)
+	}
+	if err = b.mphw.Finish(); err != nil {
 		panic(err)
 	}
 	return result, nil

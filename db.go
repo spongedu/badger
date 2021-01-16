@@ -28,7 +28,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dgryski/go-farm"
 	"github.com/ncw/directio"
 	"github.com/pingcap/badger/cache"
 	"github.com/pingcap/badger/epoch"
@@ -702,8 +701,9 @@ func (db *DB) get(key y.Key) y.ValueStruct {
 			return vs
 		}
 	}
-	keyHash := farm.Fingerprint64(key.UserKey)
-	return db.lc.get(key, keyHash)
+	// By spongedu
+	//keyHash := farm.Fingerprint64(key.UserKey)
+	return db.lc.get(key, 0)
 }
 
 func (db *DB) multiGet(pairs []keyValuePair) {

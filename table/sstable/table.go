@@ -46,6 +46,7 @@ const (
 	fileSuffix      = ".sst"
 	idxFileSuffix   = ".idx"
 	modelFileSuffix = ".mod"
+	mphFileSuffix = ".mph"
 
 	intSize = int(unsafe.Sizeof(int(0)))
 )
@@ -75,6 +76,10 @@ func IndexFilename(tableFilename string) string { return tableFilename + idxFile
 
 func ModelFilename(tableFilename string) string {
 	return tableFilename + modelFileSuffix
+}
+
+func MphFileName(tableFilename string) string {
+	return tableFilename + mphFileSuffix
 }
 
 type tableIndex struct {
@@ -115,6 +120,9 @@ type Table struct {
 
 	// For plr
 	plr *plrSegments
+
+	// For mph
+	mphIndex *MphIndex
 }
 
 // CompressionType returns the compression algorithm used for block compression.
@@ -179,6 +187,23 @@ func OpenTable(filename string, blockCache *cache.Cache, indexCache *cache.Cache
 		return nil, err
 	}
 
+
+	mphFd, err := y.OpenExistingFile(MphFileName(filename), 0)
+	if err != nil {
+		return nil, err
+	}
+
+	fstat, err := mphFd.Stat()
+	if err != nil {
+		return nil, err
+	}
+	defer mphFd.Close()
+	var mphData []byte
+	if _, err = mphFd.ReadAt(mphData, fstat.Size()); err != nil {
+		return nil, err
+	}
+
+
 	var plr *plrSegments = nil
 	out, err := exec.Command("./plr", "-i", ModelFilename(filename), "-e", "1.0").Output()
 	if err != nil {
@@ -200,7 +225,10 @@ func OpenTable(filename string, blockCache *cache.Cache, indexCache *cache.Cache
 		blockCache: blockCache,
 		indexCache: indexCache,
 		plr:        plr,
+		mphIndex:   &MphIndex{},
 	}
+	t.mphIndex.readIndex(mphData)
+
 
 	if err := t.initTableInfo(); err != nil {
 		t.Close()
@@ -286,6 +314,7 @@ func (t *Table) Get(key y.Key, keyHash uint64) (y.ValueStruct, error) {
 // which means caller should fallback to seek search. Otherwise it value will be true.
 // If the hash index does not contain such an element the returned key will be nil.
 func (t *Table) pointGet(key y.Key, keyHash uint64) (y.Key, y.ValueStruct, bool, error) {
+	/*
 	idx, err := t.getIndex()
 	if err != nil {
 		return y.Key{}, y.ValueStruct{}, false, err
@@ -293,8 +322,10 @@ func (t *Table) pointGet(key y.Key, keyHash uint64) (y.Key, y.ValueStruct, bool,
 	if idx.bf != nil && !idx.bf.Has(keyHash) {
 		return y.Key{}, y.ValueStruct{}, true, err
 	}
+	 */
 
 	blkIdx, offset := uint32(resultFallback), uint8(0)
+	/*
 	if idx.hIdx != nil {
 		blkIdx, offset = idx.hIdx.lookup(keyHash)
 	} else if idx.surf != nil {
@@ -307,6 +338,8 @@ func (t *Table) pointGet(key y.Key, keyHash uint64) (y.Key, y.ValueStruct, bool,
 			blkIdx, offset = uint32(pos.blockIdx), pos.offset
 		}
 	}
+	 */
+	blkIdx, offset = t.mphIndex.lookup(key.UserKey)
 	if blkIdx == resultFallback {
 		return y.Key{}, y.ValueStruct{}, false, nil
 	}
