@@ -129,35 +129,46 @@ func buildMphIndex(hashEntries []MphEntry) []byte {
 	var totalLen = uint64(8 + 8 + 8 + 8 + 8 + len(idx.Table.Level0) * 4 + 8 + len(idx.Table.Level0) * 4 + 3*len(hashEntries))
 	buf := make([]byte, totalLen)
 
+	p := buf[0:]
+
 	// Total Len
-	copy(buf, u64ToBytes(totalLen))
+	copy(p, u64ToBytes(totalLen))
+	log.Warn("", zap.Uint64("WRITE TOTALEN", totalLen))
+	p = p[8:]
 
 	// Entry Size
-	copy(buf, u64ToBytes(sz))
+	copy(p, u64ToBytes(sz))
+	log.Warn("", zap.Uint64("WRITE ENTRYCNT", sz))
 
 	// MPH Level0 mask
-	p := buf[8:]
+	p = p[8:]
+
 	copy(p, u64ToBytes(uint64(idx.Table.Level0Mask)))
+	log.Warn("", zap.Uint64("WRITE level0Mask", uint64(idx.Table.Level0Mask)))
 
 	// MPH Level1 mask
 	p = p[8:]
 	copy(p, u64ToBytes(uint64(idx.Table.Level1Mask)))
+	log.Warn("", zap.Uint64("WRITE level1Mask", uint64(idx.Table.Level1Mask)))
 
 	// MPH level0[i]
 	for i, _ := range idx.Table.Level0 {
 		copy(p, u32ToBytes(idx.Table.Level0[i]))
+		log.Warn("", zap.Int("WRITE level0 index", i), zap.Uint32("value", idx.Table.Level0[i]))
 		p = p[4:]
 	}
 
 	// MPH level1[i]
 	for i, _ := range idx.Table.Level0 {
 		copy(p, u32ToBytes(idx.Table.Level1[i]))
+		log.Warn("", zap.Int("WRITE level1 index", i), zap.Uint32("value", idx.Table.Level1[i]))
 		p = p[4:]
 	}
 
 	// Hash Entries
-	for _, e := range hashEntries {
+	for i, e := range hashEntries {
 		binary.LittleEndian.PutUint16(p[:2], e.blockIdx)
+		log.Warn("", zap.Int("WRITE entry index", i), zap.Uint16("blockIdx", e.blockIdx), zap.Uint8("offset", e.offset))
 		p[2] = e.offset
 		p = p[3:]
 	}
