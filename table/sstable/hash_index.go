@@ -169,7 +169,7 @@ func buildMphIndex(hashEntries []MphEntry) []byte {
 	p = p[8:]
 
 	// MPH level1[i]
-	for i, _ := range idx.Table.Level0 {
+	for i, _ := range idx.Table.Level1 {
 		copy(p, u32ToBytes(idx.Table.Level1[i]))
 		log.Warn("", zap.Int("WRITE level1 index", i), zap.Uint32("value", idx.Table.Level1[i]))
 		p = p[4:]
@@ -250,7 +250,7 @@ func (i *MphIndex) readIndex(buf []byte) {
 		log.Warn("level1", zap.Uint64("idx", ii), zap.Uint32("value", i.Table.Level1[ii]))
 		buf = buf[4:]
 		ii += 1
-		if ii >= level0Len {
+		if ii >= level1Len {
 			break
 		}
 	}
