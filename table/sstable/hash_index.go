@@ -156,7 +156,7 @@ func buildMphIndex(hashEntries []MphEntry) []byte {
 	p = p[8:]
 
 	// MPH level0[i]
-	for _, v := range idx.Table.Level0 {
+	for i, v := range idx.Table.Level0 {
 		copy(p, u32ToBytes(v))
 		log.Warn("", zap.Int("WRITE level0 index", i), zap.Uint32("value", v))
 		p = p[4:]
@@ -168,14 +168,14 @@ func buildMphIndex(hashEntries []MphEntry) []byte {
 	p = p[8:]
 
 	// MPH level1[i]
-	for _, v := range idx.Table.Level1 {
+	for i, v := range idx.Table.Level1 {
 		copy(p, u32ToBytes(v))
 		log.Warn("", zap.Int("WRITE level1 index", i), zap.Uint32("value", v))
 		p = p[4:]
 	}
 
 	// Hash Entries
-	for _, e := range hashEntries {
+	for i, e := range hashEntries {
 		binary.LittleEndian.PutUint16(p[:2], e.blockIdx)
 		log.Warn("", zap.Int("WRITE entry index", i), zap.Uint16("blockIdx", e.blockIdx), zap.Uint8("offset", e.offset))
 		p[2] = e.offset
