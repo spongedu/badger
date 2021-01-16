@@ -250,7 +250,7 @@ func (i *MphIndex) readIndex(buf []byte) {
 		v := bytesToU32(buf[:4])
 		buf = buf[4:]
 		i.Table.Level1 = append(i.Table.Level1, v)
-		log.Warn("level1", zap.Uint64("idx", ii), zap.Uint32("value", v)
+		log.Warn("level1", zap.Uint64("idx", ii), zap.Uint32("value", v))
 		ii += 1
 		if ii >= level1Len {
 			break
