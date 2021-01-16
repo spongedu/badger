@@ -173,28 +173,33 @@ func (i *MphIndex) readIndex(buf []byte) {
 	i.Entries = make([]entryPosition, 0)
 
 	// TotalLen
-	_ = bytesToU64(buf[:8])
+	totalLen := bytesToU64(buf[:8])
 	buf = buf[8:]
+	log.Warn("", zap.Uint64("TOTALEN", totalLen))
 
 	// Entry cnt
 	entryCnt := bytesToU64(buf[:8])
 	buf = buf[8:]
+	log.Warn("", zap.Uint64("ENTRY CNT", entryCnt))
 
 	// MPH level0 mask
 	level0Mask := bytesToU64(buf[:8])
 	buf = buf[8:]
+	log.Warn("", zap.Uint64("level0mask", level0Mask))
 
 	i.Table.Level0Mask = int(level0Mask)
 
 	// MPH level1 mask
 	level1Mask := bytesToU64(buf[:8])
 	buf = buf[8:]
+	log.Warn("", zap.Uint64("level1mask", level0Mask))
 
 	i.Table.Level1Mask = int(level1Mask)
 
 	// MPH level0 len
 	level0Len := bytesToU64(buf[:8])
 	buf = buf[8:]
+	log.Warn("", zap.Uint64("level0Len", level0Len))
 
 	i.Table.Level0 = make([]uint32, level0Len)
 
@@ -202,6 +207,7 @@ func (i *MphIndex) readIndex(buf []byte) {
 	ii := uint64(0)
 	for  {
 		i.Table.Level0 = append(i.Table.Level0, bytesToU32(buf[:8]))
+		log.Warn("level0", zap.Uint64("idx", ii), zap.Uint32("value", i.Table.Level0[ii]))
 		buf = buf[4:]
 		ii += 1
 		if ii >= level0Len {
@@ -212,6 +218,7 @@ func (i *MphIndex) readIndex(buf []byte) {
 	// MPH level0 len
 	level1Len := bytesToU64(buf[:8])
 	buf = buf[8:]
+	log.Warn("", zap.Uint64("level1Len", level1Len))
 
 	i.Table.Level1 = make([]uint32, level1Len)
 
@@ -219,6 +226,7 @@ func (i *MphIndex) readIndex(buf []byte) {
 	ii = uint64(0)
 	for  {
 		i.Table.Level1 = append(i.Table.Level1, bytesToU32(buf[:8]))
+		log.Warn("level1", zap.Uint64("idx", ii), zap.Uint32("value", i.Table.Level1[ii]))
 		buf = buf[4:]
 		ii += 1
 		if ii >= level0Len {
@@ -226,11 +234,13 @@ func (i *MphIndex) readIndex(buf []byte) {
 		}
 	}
 
-	// MPH level1[i]
+	// MPH entries[i]
 	ii = uint64(0)
 	for  {
 		blkIdx := binary.LittleEndian.Uint16(buf)
 		pos :=  uint8(buf[2])
+
+		log.Warn("entry", zap.Uint64("idx", ii), zap.Uint16("blkIdx", blkIdx), zap.Uint8("pos", pos))
 
 		i.Entries = append(i.Entries, entryPosition{blockIdx:  blkIdx, offset: pos})
 
