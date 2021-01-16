@@ -2,6 +2,8 @@ package sstable
 
 import (
 	"encoding/binary"
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
 	"unsafe"
 
 	"github.com/pingcap/badger/table/sstable/mph"
@@ -98,6 +100,7 @@ type MphIndex struct {
 }
 
 func buildMphIndex(hashEntries []MphEntry) []byte {
+	log.Warn("START TO BUILD MPH HASH. ", zap.Int("entryCnt", len(hashEntries)))
 	if len(hashEntries) == 0 {
 		return u32ToBytes(0)
 	}
@@ -113,7 +116,9 @@ func buildMphIndex(hashEntries []MphEntry) []byte {
 	}
 
 	idx.Entries = entries
+	log.Warn("START idx.Table.Build")
 	idx.Table = mph.Build(keys)
+	log.Warn("END idx.Table.Build")
 
 	sz := uint64(len(hashEntries))
 
@@ -153,6 +158,7 @@ func buildMphIndex(hashEntries []MphEntry) []byte {
 		p[2] = e.offset
 		p = p[3:]
 	}
+	log.Warn("FINISH idx.Table.Build")
 	return buf
 }
 
