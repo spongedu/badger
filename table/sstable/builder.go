@@ -122,6 +122,8 @@ type Builder struct {
 
 	level int
 	bufSize int
+
+	mphF *os.File
 }
 
 type tableWriter interface {
@@ -169,6 +171,7 @@ func NewTableBuilder(f *os.File, limiter *rate.Limiter, level int, opt options.T
 
 		level: level,
 		bufSize: opt.WriteBufferSize,
+
 	}
 	modFile, err := y.OpenTruncFile(ModelFilename(b.file.Name()), false)
 	if err != nil {
@@ -181,6 +184,7 @@ func NewTableBuilder(f *os.File, limiter *rate.Limiter, level int, opt options.T
 	if err != nil {
 		panic(err)
 	}
+	b.mphF = mphFile
 
 	b.mphw = fileutil.NewDirectWriter(f, opt.WriteBufferSize, limiter)
 	b.mphw.Reset(mphFile)
@@ -220,11 +224,15 @@ func (b *Builder) Reset(f *os.File) {
 	b.mw = fileutil.NewDirectWriter(f, b.bufSize, nil)
 	b.mw.Reset(modFile)
 
+	if b.mphF != nil {
+		b.mphF.Close()
+	}
 
 	mphFile, err := y.OpenTruncFile(MphFileName(b.file.Name()), false)
 	if err != nil {
 		panic(err)
 	}
+	b.mphF = mphFile
 
 	b.mphw = fileutil.NewDirectWriter(f, b.bufSize, nil)
 	b.mphw.Reset(mphFile)
@@ -478,6 +486,11 @@ type BuildResult struct {
 
 // Finish finishes the table by appending the index.
 func (b *Builder) Finish() (*BuildResult, error) {
+	defer  func() {
+		if b.mphF != nil {
+			b.mphF.Close()
+		}
+	}()
 	err := b.finishBlock() // This will never start a new block.
 	if err != nil {
 		return nil, err

@@ -188,21 +188,6 @@ func OpenTable(filename string, blockCache *cache.Cache, indexCache *cache.Cache
 	}
 
 
-	mphFd, err := y.OpenExistingFile(MphFileName(filename), 0)
-	if err != nil {
-		panic(err)
-	}
-
-	fstat, err := mphFd.Stat()
-	if err != nil {
-		return nil, err
-	}
-	defer mphFd.Close()
-	mphData := make([]byte, fstat.Size())
-	if _, err = mphFd.ReadAt(mphData, fstat.Size()); err != nil {
-		return nil, err
-	}
-
 
 	var plr *plrSegments = nil
 	out, err := exec.Command("./plr", "-i", ModelFilename(filename), "-e", "1.0").Output()
@@ -225,9 +210,8 @@ func OpenTable(filename string, blockCache *cache.Cache, indexCache *cache.Cache
 		blockCache: blockCache,
 		indexCache: indexCache,
 		plr:        plr,
-		mphIndex:   &MphIndex{},
+		mphIndex:   nil,
 	}
-	t.mphIndex.readIndex(mphData)
 
 
 	if err := t.initTableInfo(); err != nil {
@@ -314,6 +298,25 @@ func (t *Table) Get(key y.Key, keyHash uint64) (y.ValueStruct, error) {
 // which means caller should fallback to seek search. Otherwise it value will be true.
 // If the hash index does not contain such an element the returned key will be nil.
 func (t *Table) pointGet(key y.Key, keyHash uint64) (y.Key, y.ValueStruct, bool, error) {
+	if  t.mphIndex == nil {
+		if _, err := os.Stat(MphFileName(t.Filename())); err == nil {
+			fd, err := y.OpenExistingFile(MphFileName(t.Filename()), 0)
+			if err != nil {
+				panic(err)
+			}
+			fstat, err := fd.Stat()
+			if err != nil {
+				panic(err)
+			}
+			defer fd.Close()
+			mphData := make([]byte, fstat.Size())
+			if _, err = fd.ReadAt(mphData, fstat.Size()); err != nil {
+				panic(err)
+			}
+			t.mphIndex.readIndex(mphData)
+		}
+	}
+
 	/*
 	idx, err := t.getIndex()
 	if err != nil {
@@ -460,6 +463,7 @@ func (t *Table) getIndex() (*tableIndex, error) {
 }
 
 func (t *Table) loadIndexData(useMmap bool) (*metaDecoder, error) {
+
 	if t.indexFd == nil {
 		return newMetaDecoder(t.indexData)
 	}

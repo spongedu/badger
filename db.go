@@ -954,7 +954,7 @@ func (db *DB) runFlushMemTable(c *y.Closer) error {
 		fd.Close()
 		tbl, err := sstable.OpenTable(filename, db.blockCache, db.indexCache)
 		if err != nil {
-			log.Info("error while opening table", zap.Error(err))
+			log.Info("error while opening table", zap.Error(err), zap.String("filename", filename))
 			return err
 		}
 		err = db.lc.addLevel0Table(tbl, headInfo)
