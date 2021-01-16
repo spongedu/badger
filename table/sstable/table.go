@@ -190,7 +190,7 @@ func OpenTable(filename string, blockCache *cache.Cache, indexCache *cache.Cache
 
 	mphFd, err := y.OpenExistingFile(MphFileName(filename), 0)
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
 
 	fstat, err := mphFd.Stat()
