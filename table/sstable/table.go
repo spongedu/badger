@@ -198,7 +198,7 @@ func OpenTable(filename string, blockCache *cache.Cache, indexCache *cache.Cache
 		return nil, err
 	}
 	defer mphFd.Close()
-	var mphData []byte
+	mphData := make([]byte, fstat.Size())
 	if _, err = mphFd.ReadAt(mphData, fstat.Size()); err != nil {
 		return nil, err
 	}
