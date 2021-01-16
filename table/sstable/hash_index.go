@@ -213,7 +213,7 @@ func (i *MphIndex) readIndex(buf []byte) {
 	// MPH level1 mask
 	level1Mask := bytesToU64(buf[:8])
 	buf = buf[8:]
-	log.Warn("", zap.Uint64("level1mask", level0Mask))
+	log.Warn("", zap.Uint64("level1mask", level1Mask))
 
 	i.Table.Level1Mask = int(level1Mask)
 
@@ -227,7 +227,7 @@ func (i *MphIndex) readIndex(buf []byte) {
 	// MPH level0[i]
 	ii := uint64(0)
 	for  {
-		i.Table.Level0 = append(i.Table.Level0, bytesToU32(buf[:8]))
+		i.Table.Level0 = append(i.Table.Level0, bytesToU32(buf[:4]))
 		log.Warn("level0", zap.Uint64("idx", ii), zap.Uint32("value", i.Table.Level0[ii]))
 		buf = buf[4:]
 		ii += 1
@@ -246,7 +246,7 @@ func (i *MphIndex) readIndex(buf []byte) {
 	// MPH level1[i]
 	ii = uint64(0)
 	for  {
-		i.Table.Level1 = append(i.Table.Level1, bytesToU32(buf[:8]))
+		i.Table.Level1 = append(i.Table.Level1, bytesToU32(buf[:4]))
 		log.Warn("level1", zap.Uint64("idx", ii), zap.Uint32("value", i.Table.Level1[ii]))
 		buf = buf[4:]
 		ii += 1
