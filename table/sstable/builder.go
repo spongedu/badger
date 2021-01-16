@@ -247,7 +247,9 @@ func (b *Builder) addIndex(key y.Key) {
 		b.surfVals = append(b.surfVals, pos.encode())
 	} else {
 		b.hashEntries = append(b.hashEntries, hashEntry{pos, keyHash})
-		b.mphEntries = append(b.mphEntries, MphEntry{pos, key.UserKey})
+		arr := make([]byte, len(key.UserKey))
+		copy(arr, key.UserKey)
+		b.mphEntries = append(b.mphEntries, MphEntry{pos, arr})
 	}
 }
 
