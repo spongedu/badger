@@ -139,17 +139,22 @@ func buildMphIndex(hashEntries []MphEntry) []byte {
 	// Entry Size
 	copy(p, u64ToBytes(sz))
 	log.Warn("", zap.Uint64("WRITE ENTRYCNT", sz))
+	p = p[8:]
 
 	// MPH Level0 mask
-	p = p[8:]
-
 	copy(p, u64ToBytes(uint64(idx.Table.Level0Mask)))
 	log.Warn("", zap.Uint64("WRITE level0Mask", uint64(idx.Table.Level0Mask)))
+	p = p[8:]
 
 	// MPH Level1 mask
-	p = p[8:]
 	copy(p, u64ToBytes(uint64(idx.Table.Level1Mask)))
 	log.Warn("", zap.Uint64("WRITE level1Mask", uint64(idx.Table.Level1Mask)))
+	p = p[8:]
+
+	// MPH Level0 veclen
+	copy(p, u64ToBytes(uint64(len(idx.Table.Level0))))
+	log.Warn("", zap.Uint64("WRITE level0len", uint64(len(idx.Table.Level0))))
+	p = p[8:]
 
 	// MPH level0[i]
 	for i, _ := range idx.Table.Level0 {
@@ -157,6 +162,11 @@ func buildMphIndex(hashEntries []MphEntry) []byte {
 		log.Warn("", zap.Int("WRITE level0 index", i), zap.Uint32("value", idx.Table.Level0[i]))
 		p = p[4:]
 	}
+
+	// MPH Level1 veclen
+	copy(p, u64ToBytes(uint64(len(idx.Table.Level1))))
+	log.Warn("", zap.Uint64("WRITE level0len", uint64(len(idx.Table.Level1))))
+	p = p[8:]
 
 	// MPH level1[i]
 	for i, _ := range idx.Table.Level0 {
@@ -226,7 +236,7 @@ func (i *MphIndex) readIndex(buf []byte) {
 		}
 	}
 
-	// MPH level0 len
+	// MPH level1 len
 	level1Len := bytesToU64(buf[:8])
 	buf = buf[8:]
 	log.Warn("", zap.Uint64("level1Len", level1Len))
