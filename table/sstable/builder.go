@@ -103,6 +103,7 @@ type Builder struct {
 	biggest  y.Key
 
 	hashEntries []hashEntry
+	mphEntries  []MphEntry
 	bloomFpr    float64
 	useGlobalTS bool
 	opt         options.TableBuilderOptions
@@ -157,6 +158,7 @@ func NewTableBuilder(f *os.File, limiter *rate.Limiter, level int, opt options.T
 		file:        f,
 		buf:         make([]byte, 0, 4*1024),
 		hashEntries: make([]hashEntry, 0, 4*1024),
+		mphEntries:  make([]MphEntry, 0, 4*1024),
 		bloomFpr:    fprBase / levelFactor,
 		compression: opt.CompressionPerLevel[level],
 		opt:         opt,
@@ -188,6 +190,7 @@ func NewExternalTableBuilder(f *os.File, limiter *rate.Limiter, opt options.Tabl
 		w:           fileutil.NewDirectWriter(f, opt.WriteBufferSize, limiter),
 		buf:         make([]byte, 0, 4*1024),
 		hashEntries: make([]hashEntry, 0, 4*1024),
+		mphEntries: make([]MphEntry, 0, 4*1024),
 		bloomFpr:    opt.LogicalBloomFPR,
 		useGlobalTS: true,
 		compression: compression,
@@ -223,6 +226,7 @@ func (b *Builder) resetBuffers() {
 	b.blockEndOffsets = b.blockEndOffsets[:0]
 	b.entryEndOffsets = b.entryEndOffsets[:0]
 	b.hashEntries = b.hashEntries[:0]
+	b.mphEntries = b.mphEntries[:0]
 	b.surfKeys = nil
 	b.surfVals = nil
 	b.smallest.UserKey = b.smallest.UserKey[:0]
@@ -266,6 +270,7 @@ func (b *Builder) addIndex(key y.Key) {
 		b.surfVals = append(b.surfVals, pos.encode())
 	} else {
 		b.hashEntries = append(b.hashEntries, hashEntry{pos, keyHash})
+		b.mphEntries = append(b.mphEntries, MphEntry{pos, string(key.UserKey)})
 	}
 }
 
