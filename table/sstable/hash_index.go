@@ -126,7 +126,7 @@ func buildMphIndex(hashEntries []MphEntry) []byte {
 	sz := uint64(len(hashEntries))
 
 	// totalLen(8) + entryCnt(8) + Level0Mask(8) + Level1Mask(8) + Level0Size(8) +Level0(var) + Level1Size(8) +Level1(var) + 3*HashEntries
-	var totalLen = uint64(8 + 8 + 8 + 8 + 8 + len(idx.Table.Level0) * 4 + 8 + len(idx.Table.Level0) * 4 + 3*len(hashEntries))
+	var totalLen = uint64(8 + 8 + 8 + 8 + 8 + len(idx.Table.Level0) * 4 + 8 + len(idx.Table.Level1) * 4 + 3*len(hashEntries))
 	buf := make([]byte, totalLen)
 
 	p := buf[0:]
