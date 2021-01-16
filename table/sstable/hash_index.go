@@ -101,9 +101,6 @@ type MphIndex struct {
 
 func buildMphIndex(hashEntries []MphEntry) []byte {
 	log.Warn("START TO BUILD MPH HASH. ", zap.Int("entryCnt", len(hashEntries)))
-	defer func() {
-		log.Warn("FINISH idx.Table.Build")
-	}()
 	if len(hashEntries) == 0 {
 		return u32ToBytes(0)
 	}
@@ -120,6 +117,9 @@ func buildMphIndex(hashEntries []MphEntry) []byte {
 
 	idx.Entries = entries
 	log.Warn("START idx.Table.Build")
+	for i, k := range keys {
+		log.Warn("ky", zap.Int("index", i), zap.String("value", string(k)))
+	}
 	idx.Table = mph.Build(keys)
 	log.Warn("END idx.Table.Build")
 
