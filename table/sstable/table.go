@@ -53,6 +53,7 @@ type tableIndex struct {
 	bf              *bbloom.Bloom
 	hIdx            *hashIndex
 	surf            *surf.SuRF
+	mpf             *MphIndex
 }
 
 // Table represents a loaded table file with the info we have about it
@@ -236,13 +237,17 @@ func (t *Table) pointGet(key y.Key, keyHash uint64) (y.Key, y.ValueStruct, bool,
 	if err != nil {
 		return y.Key{}, y.ValueStruct{}, false, err
 	}
+	/*
 	if idx.bf != nil && !idx.bf.Has(keyHash) {
 		return y.Key{}, y.ValueStruct{}, true, err
 	}
+	 */
 
 	blkIdx, offset := uint32(resultFallback), uint8(0)
-	if idx.hIdx != nil {
-		blkIdx, offset = idx.hIdx.lookup(keyHash)
+	//if idx.hIdx != nil {
+	//	blkIdx, offset = idx.hIdx.lookup(keyHash)
+	if idx.mpf != nil {
+			blkIdx, offset = idx.mpf.lookup(key.UserKey)
 	} else if idx.surf != nil {
 		v, ok := idx.surf.Get(key.UserKey)
 		if !ok {
@@ -332,8 +337,10 @@ func (t *Table) readTableIndex(d *metaDecoder) *tableIndex {
 			}
 		case idHashIndex:
 			if d := d.decode(); len(d) != 0 {
-				idx.hIdx = new(hashIndex)
-				idx.hIdx.readIndex(d)
+				//idx.hIdx = new(hashIndex)
+				//idx.hIdx.readIndex(d)
+				idx.mpf = new(MphIndex)
+				idx.mpf.readIndex(d)
 			}
 		case idSuRFIndex:
 			if d := d.decode(); len(d) != 0 {

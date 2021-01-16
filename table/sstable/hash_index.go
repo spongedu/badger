@@ -2,6 +2,10 @@ package sstable
 
 import (
 	"encoding/binary"
+	"unsafe"
+
+	"github.com/pingcap/badger/table/sstable/mph"
+
 )
 
 const (
@@ -81,4 +85,154 @@ func (i *hashIndex) lookup(keyHash uint64) (uint32, uint8) {
 	buf := i.buckets[idx*3:]
 	blkIdx := binary.LittleEndian.Uint16(buf)
 	return uint32(blkIdx), uint8(buf[2])
+}
+
+type MphEntry struct {
+	entryPosition
+	key []byte
+}
+
+type MphIndex struct {
+	Table *mph.Table
+	Entries   []entryPosition
+}
+
+func buildMphIndex(hashEntries []MphEntry) []byte {
+	if len(hashEntries) == 0 {
+		return u32ToBytes(0)
+	}
+
+	idx := MphIndex{}
+
+	keys := make([][]byte,0)
+	entries := make([]entryPosition,0)
+
+	for _, e := range hashEntries {
+		keys = append(keys, e.key)
+		entries = append(entries, e.entryPosition)
+	}
+
+	idx.Entries = entries
+	idx.Table = mph.Build(keys)
+
+	sz := uint64(len(hashEntries))
+
+	// totalLen(8) + entryCnt(8) + Level0Mask(8) + Level1Mask(8) + Level0Size(8) +Level0(var) + Level1Size(8) +Level1(var) + 3*HashEntries
+	var totalLen = uint64(8 + 8 + 8 + 8 + 8 + len(idx.Table.Level0) * 4 + 8 + len(idx.Table.Level0) * 4 + 3*len(hashEntries))
+	buf := make([]byte, totalLen)
+
+	// Total Len
+	copy(buf, u64ToBytes(totalLen))
+
+	// Entry Size
+	copy(buf, u64ToBytes(sz))
+
+	// MPH Level0 mask
+	p := buf[8:]
+	copy(p, u64ToBytes(uint64(idx.Table.Level0Mask)))
+
+	// MPH Level1 mask
+	p = p[8:]
+	copy(p, u64ToBytes(uint64(idx.Table.Level1Mask)))
+
+	// MPH level0[i]
+	for i, _ := range idx.Table.Level0 {
+		copy(p, u32ToBytes(idx.Table.Level0[i]))
+		p = p[4:]
+	}
+
+	// MPH level1[i]
+	for i, _ := range idx.Table.Level0 {
+		copy(p, u32ToBytes(idx.Table.Level1[i]))
+		p = p[4:]
+	}
+
+	// Hash Entries
+	for _, e := range hashEntries {
+		binary.LittleEndian.PutUint16(p[:2], e.blockIdx)
+		p[2] = e.offset
+		p = p[3:]
+	}
+	return buf
+}
+
+func (i *MphIndex) readIndex(buf []byte) {
+
+	i.Table = &mph.Table{}
+	i.Entries = make([]entryPosition, 0)
+
+	// TotalLen
+	_ = bytesToU64(buf[:8])
+	buf = buf[8:]
+
+	// Entry cnt
+	entryCnt := bytesToU64(buf[:8])
+	buf = buf[8:]
+
+	// MPH level0 mask
+	level0Mask := bytesToU64(buf[:8])
+	buf = buf[8:]
+
+	i.Table.Level0Mask = int(level0Mask)
+
+	// MPH level1 mask
+	level1Mask := bytesToU64(buf[:8])
+	buf = buf[8:]
+
+	i.Table.Level1Mask = int(level1Mask)
+
+	// MPH level0 len
+	level0Len := bytesToU64(buf[:8])
+	buf = buf[8:]
+
+	i.Table.Level0 = make([]uint32, level0Len)
+
+	// MPH level0[i]
+	ii := uint64(0)
+	for  {
+		i.Table.Level0 = append(i.Table.Level0, bytesToU32(buf[:8]))
+		buf = buf[4:]
+		ii += 1
+		if ii >= level0Len {
+			break
+		}
+	}
+
+	// MPH level0 len
+	level1Len := bytesToU64(buf[:8])
+	buf = buf[8:]
+
+	i.Table.Level1 = make([]uint32, level1Len)
+
+	// MPH level1[i]
+	ii = uint64(0)
+	for  {
+		i.Table.Level1 = append(i.Table.Level1, bytesToU32(buf[:8]))
+		buf = buf[4:]
+		ii += 1
+		if ii >= level0Len {
+			break
+		}
+	}
+
+	// MPH level1[i]
+	ii = uint64(0)
+	for  {
+		blkIdx := binary.LittleEndian.Uint16(buf)
+		pos :=  uint8(buf[2])
+
+		i.Entries = append(i.Entries, entryPosition{blockIdx:  blkIdx, offset: pos})
+
+		buf = buf[3:]
+		ii += 1
+		if ii >= entryCnt {
+			break
+		}
+	}
+}
+
+func (i *MphIndex) lookup(key []byte) (uint32, uint8) {
+	idx := i.Table.Lookup(*(*string)(unsafe.Pointer(&key)))
+	e := i.Entries[idx]
+	return uint32(e.blockIdx), e.offset
 }
