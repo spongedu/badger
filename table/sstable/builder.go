@@ -86,7 +86,7 @@ type Builder struct {
 	file          *os.File
 	w             tableWriter
 	mw            tableWriter
-	mphw          tableWriter
+	//mphw          tableWriter
 	buf           []byte
 	writtenLen    int
 	rawWrittenLen int
@@ -123,7 +123,7 @@ type Builder struct {
 	level int
 	bufSize int
 
-	mphF *os.File
+	//mphF *os.File
 }
 
 type tableWriter interface {
@@ -180,14 +180,14 @@ func NewTableBuilder(f *os.File, limiter *rate.Limiter, level int, opt options.T
 	b.mw = fileutil.NewDirectWriter(f, opt.WriteBufferSize, limiter)
 	b.mw.Reset(modFile)
 
-	mphFile, err := y.OpenTruncFile(MphFileName(b.file.Name()), false)
-	if err != nil {
-		panic(err)
-	}
-	b.mphF = mphFile
+	// mphFile, err := y.OpenTruncFile(MphFileName(b.file.Name()), false)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	//b.mphF = mphFile
 
-	b.mphw = fileutil.NewDirectWriter(f, opt.WriteBufferSize, limiter)
-	b.mphw.Reset(mphFile)
+	//b.mphw = fileutil.NewDirectWriter(f, opt.WriteBufferSize, limiter)
+	//b.mphw.Reset(mphFile)
 
 	if f != nil {
 		b.w = fileutil.NewDirectWriter(f, opt.WriteBufferSize, limiter)
@@ -224,18 +224,18 @@ func (b *Builder) Reset(f *os.File) {
 	b.mw = fileutil.NewDirectWriter(f, b.bufSize, nil)
 	b.mw.Reset(modFile)
 
-	if b.mphF != nil {
-		b.mphF.Close()
-	}
+	// if b.mphF != nil {
+	// 	b.mphF.Close()
+	// }
 
-	mphFile, err := y.OpenTruncFile(MphFileName(b.file.Name()), false)
-	if err != nil {
-		panic(err)
-	}
-	b.mphF = mphFile
+	// mphFile, err := y.OpenTruncFile(MphFileName(b.file.Name()), false)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	//b.mphF = mphFile
 
-	b.mphw = fileutil.NewDirectWriter(f, b.bufSize, nil)
-	b.mphw.Reset(mphFile)
+	//b.mphw = fileutil.NewDirectWriter(f, b.bufSize, nil)
+	//b.mphw.Reset(mphFile)
 }
 
 // SetIsManaged should be called when ingesting a table into a managed DB.
@@ -474,6 +474,7 @@ const (
 	idHashIndex
 	idSuRFIndex
 	idOldBlockLen
+	idmpf
 )
 
 // BuildResult contains the build result info, if it's file based compaction, fileName should be used to open Table.
@@ -486,11 +487,11 @@ type BuildResult struct {
 
 // Finish finishes the table by appending the index.
 func (b *Builder) Finish() (*BuildResult, error) {
-	defer  func() {
-		if b.mphF != nil {
-			b.mphF.Close()
-		}
-	}()
+	// defer  func() {
+	// 	if b.mphF != nil {
+	// 		b.mphF.Close()
+	// 	}
+	// }()
 	err := b.finishBlock() // This will never start a new block.
 	if err != nil {
 		return nil, err
@@ -569,7 +570,7 @@ func (b *Builder) Finish() (*BuildResult, error) {
 	}
 	encoder.append(hashIndex, idHashIndex)
 
-	b.mphw.Write(buildMphIndex(b.mphEntries))
+	encoder.append(buildMphIndex(b.mphEntries), idmpf)
 
 	var surfIndex []byte
 	if b.useSuRF && len(b.surfKeys) > 0 {
@@ -594,9 +595,9 @@ func (b *Builder) Finish() (*BuildResult, error) {
 	if err = b.mw.Finish(); err != nil {
 		panic(err)
 	}
-	if err = b.mphw.Finish(); err != nil {
-		panic(err)
-	}
+	//if err = b.mphw.Finish(); err != nil {
+	//	panic(err)
+	//}
 	return result, nil
 }
 
