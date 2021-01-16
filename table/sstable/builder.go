@@ -19,6 +19,7 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/pingcap/log"
 	"math"
 	"os"
 	"reflect"
@@ -491,6 +492,7 @@ func (b *Builder) Finish() (*BuildResult, error) {
 	if b.file == nil {
 		result.IndexData = y.Copy(b.w.(*inMemWriter).Bytes())
 	}
+	log.Warn("FINISH BUILD TABLE")
 	return result, nil
 }
 

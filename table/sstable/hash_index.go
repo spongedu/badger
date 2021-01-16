@@ -101,6 +101,9 @@ type MphIndex struct {
 
 func buildMphIndex(hashEntries []MphEntry) []byte {
 	log.Warn("START TO BUILD MPH HASH. ", zap.Int("entryCnt", len(hashEntries)))
+	defer func() {
+		log.Warn("FINISH idx.Table.Build")
+	}()
 	if len(hashEntries) == 0 {
 		return u32ToBytes(0)
 	}
@@ -158,12 +161,14 @@ func buildMphIndex(hashEntries []MphEntry) []byte {
 		p[2] = e.offset
 		p = p[3:]
 	}
-	log.Warn("FINISH idx.Table.Build")
 	return buf
 }
 
 func (i *MphIndex) readIndex(buf []byte) {
-
+	log.Warn("START read mphIndex. ")
+	defer func() {
+		log.Warn("END read index")
+	}()
 	i.Table = &mph.Table{}
 	i.Entries = make([]entryPosition, 0)
 
@@ -238,6 +243,10 @@ func (i *MphIndex) readIndex(buf []byte) {
 }
 
 func (i *MphIndex) lookup(key []byte) (uint32, uint8) {
+	log.Warn("END mph lookup")
+	defer func() {
+		log.Warn("END mph lookup")
+	}()
 	idx := i.Table.Lookup(*(*string)(unsafe.Pointer(&key)))
 	e := i.Entries[idx]
 	return uint32(e.blockIdx), e.offset
