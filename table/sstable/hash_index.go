@@ -157,9 +157,9 @@ func buildMphIndex(hashEntries []MphEntry) []byte {
 	p = p[8:]
 
 	// MPH level0[i]
-	for i, _ := range idx.Table.Level0 {
-		copy(p, u32ToBytes(idx.Table.Level0[i]))
-		log.Warn("", zap.Int("WRITE level0 index", i), zap.Uint32("value", idx.Table.Level0[i]))
+	for i, v := range idx.Table.Level0 {
+		copy(p, u32ToBytes(v))
+		log.Warn("", zap.Int("WRITE level0 index", i), zap.Uint32("value", v))
 		p = p[4:]
 	}
 
@@ -169,9 +169,9 @@ func buildMphIndex(hashEntries []MphEntry) []byte {
 	p = p[8:]
 
 	// MPH level1[i]
-	for i, _ := range idx.Table.Level1 {
-		copy(p, u32ToBytes(idx.Table.Level1[i]))
-		log.Warn("", zap.Int("WRITE level1 index", i), zap.Uint32("value", idx.Table.Level1[i]))
+	for i, v := range idx.Table.Level1 {
+		copy(p, u32ToBytes(v))
+		log.Warn("", zap.Int("WRITE level1 index", i), zap.Uint32("value", v))
 		p = p[4:]
 	}
 
@@ -195,41 +195,42 @@ func (i *MphIndex) readIndex(buf []byte) {
 
 	// TotalLen
 	totalLen := bytesToU64(buf[:8])
-	buf = buf[8:]
 	log.Warn("", zap.Uint64("TOTALEN", totalLen))
+	buf = buf[8:]
 
 	// Entry cnt
 	entryCnt := bytesToU64(buf[:8])
-	buf = buf[8:]
 	log.Warn("", zap.Uint64("ENTRY CNT", entryCnt))
+	buf = buf[8:]
 
 	// MPH level0 mask
 	level0Mask := bytesToU64(buf[:8])
-	buf = buf[8:]
 	log.Warn("", zap.Uint64("level0mask", level0Mask))
+	buf = buf[8:]
 
 	i.Table.Level0Mask = int(level0Mask)
 
 	// MPH level1 mask
 	level1Mask := bytesToU64(buf[:8])
-	buf = buf[8:]
 	log.Warn("", zap.Uint64("level1mask", level1Mask))
+	buf = buf[8:]
 
 	i.Table.Level1Mask = int(level1Mask)
 
 	// MPH level0 len
 	level0Len := bytesToU64(buf[:8])
-	buf = buf[8:]
 	log.Warn("", zap.Uint64("level0Len", level0Len))
+	buf = buf[8:]
 
-	i.Table.Level0 = make([]uint32, level0Len)
+	i.Table.Level0 = make([]uint32,0)
 
 	// MPH level0[i]
 	ii := uint64(0)
 	for  {
-		i.Table.Level0 = append(i.Table.Level0, bytesToU32(buf[:4]))
-		log.Warn("level0", zap.Uint64("idx", ii), zap.Uint32("value", i.Table.Level0[ii]))
+		v := bytesToU32(buf[:4])
 		buf = buf[4:]
+		log.Warn("level0", zap.Uint64("idx", ii), zap.Uint32("value", v))
+		i.Table.Level0 = append(i.Table.Level0, v)
 		ii += 1
 		if ii >= level0Len {
 			break
@@ -241,14 +242,15 @@ func (i *MphIndex) readIndex(buf []byte) {
 	buf = buf[8:]
 	log.Warn("", zap.Uint64("level1Len", level1Len))
 
-	i.Table.Level1 = make([]uint32, level1Len)
+	i.Table.Level1 = make([]uint32,0)
 
 	// MPH level1[i]
 	ii = uint64(0)
 	for  {
-		i.Table.Level1 = append(i.Table.Level1, bytesToU32(buf[:4]))
-		log.Warn("level1", zap.Uint64("idx", ii), zap.Uint32("value", i.Table.Level1[ii]))
+		v := bytesToU32(buf[:4])
 		buf = buf[4:]
+		i.Table.Level1 = append(i.Table.Level1, v)
+		log.Warn("level1", zap.Uint64("idx", ii), zap.Uint32("value", v)
 		ii += 1
 		if ii >= level1Len {
 			break
